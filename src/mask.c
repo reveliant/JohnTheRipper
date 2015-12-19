@@ -17,6 +17,7 @@
 #include <ctype.h>
 #include <assert.h>
 
+#include "arch.h"
 #include "misc.h" /* for error() */
 #include "logger.h"
 #include "recovery.h"
@@ -34,12 +35,21 @@
 #include "memdbg.h"
 #include "mask_ext.h"
 
-static parsed_ctx parsed_mask;
-static cpu_mask_context cpu_mask_ctx, rec_ctx;
+extern void wordlist_hybrid_fix_state(void);
+extern void mkv_hybrid_fix_state(void);
+extern void inc_hybrid_fix_state(void);
+extern void pp_hybrid_fix_state(void);
+extern void ext_hybrid_fix_state(void);
+
+static mask_parsed_ctx parsed_mask;
+static mask_cpu_context cpu_mask_ctx, rec_ctx;
 static int *template_key_offsets;
 static char *mask = NULL, *template_key;
 static int max_keylen, fmt_maxlen, rec_len, rec_cl, restored_len, restored = 1;
 static unsigned long long cand_length;
+static struct fmt_main *mask_fmt;
+static int mask_bench_index;
+static int parent_fix_state_pending;
 int mask_add_len, mask_num_qw, mask_cur_len;
 
 /*
@@ -180,201 +190,261 @@ static char* plhdr2string(char p, int fmt_case)
 	fprintf(stderr, "%s(%c)\n", __FUNCTION__, p);
 #endif
 
+	/*
+	 * Force lowercase for case insignificant formats. Dupes will
+	 * be removed, so eg. ?l?u == ?l.
+	 */
+	if (!fmt_case) {
+		if (p == 'u')
+			p = 'l';
+		if (p == 'U')
+			p = 'L';
+	}
+
 #define add_range(a, b)	for (j = a; j <= b; j++) *o++ = j
 #define add_string(str)	for (s = (char*)str; *s; s++) *o++ = *s
 
-	if ((pers_opts.internal_cp == ASCII ||
-	     pers_opts.internal_cp == UTF_8) &&
+	if ((options.internal_cp == ASCII ||
+	     options.internal_cp == UTF_8) &&
 	    (p == 'L' || p == 'U' || p == 'D' || p == 'S')) {
 		if (john_main_process)
 			fprintf(stderr,
 			    "Can't use ?%c placeholder without using an 8-bit legacy codepage for\n"
 			    "--internal-codepage%s\n", p,
-			    (pers_opts.internal_cp == UTF_8) ?
+			    (options.internal_cp == UTF_8) ?
 			    " (UTF-8 is not a codepage, it's a Unicode encoding)." : ".");
 		error();
 	}
 
 	switch(p) {
+
 	case 'l': /* lower-case letters */
-		add_range('a', 'z');
+		/* Rockyou character frequency */
+		add_string("aeionrlstmcdyhubkgpjvfwzxq");
 		break;
+
 	case 'L': /* lower-case letters, non-ASCII only */
-		switch (pers_opts.internal_cp) {
+		switch (options.internal_cp) {
 		case CP437:
 			add_string(CHARS_LOWER_CP437
-			           CHARS_LOW_ONLY_CP437);
+			           CHARS_LOW_ONLY_CP437
+			           CHARS_NOCASE_CP437);
 			break;
 		case CP720:
 			add_string(CHARS_LOWER_CP720
-			           CHARS_LOW_ONLY_CP720);
+			           CHARS_LOW_ONLY_CP720
+			           CHARS_NOCASE_CP720);
 			break;
 		case CP737:
 			add_string(CHARS_LOWER_CP737
-			           CHARS_LOW_ONLY_CP737);
+			           CHARS_LOW_ONLY_CP737
+			           CHARS_NOCASE_CP737);
 			break;
 		case CP850:
 			add_string(CHARS_LOWER_CP850
-			           CHARS_LOW_ONLY_CP850);
+			           CHARS_LOW_ONLY_CP850
+			           CHARS_NOCASE_CP850);
 			break;
 		case CP852:
 			add_string(CHARS_LOWER_CP852
-			           CHARS_LOW_ONLY_CP852);
+			           CHARS_LOW_ONLY_CP852
+			           CHARS_NOCASE_CP852);
 			break;
 		case CP858:
 			add_string(CHARS_LOWER_CP858
-			           CHARS_LOW_ONLY_CP858);
+			           CHARS_LOW_ONLY_CP858
+			           CHARS_NOCASE_CP858);
 			break;
 		case CP866:
 			add_string(CHARS_LOWER_CP866
-			           CHARS_LOW_ONLY_CP866);
+			           CHARS_LOW_ONLY_CP866
+			           CHARS_NOCASE_CP866);
 			break;
 		case CP868:
 			add_string(CHARS_LOWER_CP868
-			           CHARS_LOW_ONLY_CP868);
+			           CHARS_LOW_ONLY_CP868
+			           CHARS_NOCASE_CP868);
 			break;
 		case CP1250:
 			add_string(CHARS_LOWER_CP1250
-			           CHARS_LOW_ONLY_CP1250);
+			           CHARS_LOW_ONLY_CP1250
+			           CHARS_NOCASE_CP1250);
 			break;
 		case CP1251:
 			add_string(CHARS_LOWER_CP1251
-			           CHARS_LOW_ONLY_CP1251);
+			           CHARS_LOW_ONLY_CP1251
+			           CHARS_NOCASE_CP1251);
 			break;
 		case CP1252:
 			add_string(CHARS_LOWER_CP1252
-			           CHARS_LOW_ONLY_CP1252);
+			           CHARS_LOW_ONLY_CP1252
+			           CHARS_NOCASE_CP1252);
 			break;
 		case CP1253:
 			add_string(CHARS_LOWER_CP1253
-			           CHARS_LOW_ONLY_CP1253);
+			           CHARS_LOW_ONLY_CP1253
+			           CHARS_NOCASE_CP1253);
 			break;
 		case CP1254:
 			add_string(CHARS_LOWER_CP1254
-			           CHARS_LOW_ONLY_CP1254);
+			           CHARS_LOW_ONLY_CP1254
+			           CHARS_NOCASE_CP1254);
 			break;
 		case CP1255:
 			add_string(CHARS_LOWER_CP1255
-			           CHARS_LOW_ONLY_CP1255);
+			           CHARS_LOW_ONLY_CP1255
+			           CHARS_NOCASE_CP1255);
 			break;
 		case CP1256:
 			add_string(CHARS_LOWER_CP1256
-			           CHARS_LOW_ONLY_CP1256);
+			           CHARS_LOW_ONLY_CP1256
+			           CHARS_NOCASE_CP1256);
 			break;
 		case ISO_8859_1:
 			add_string(CHARS_LOWER_ISO_8859_1
-			           CHARS_LOW_ONLY_ISO_8859_1);
+			           CHARS_LOW_ONLY_ISO_8859_1
+			           CHARS_NOCASE_ISO_8859_1);
 			break;
 		case ISO_8859_2:
 			add_string(CHARS_LOWER_ISO_8859_2
-			           CHARS_LOW_ONLY_ISO_8859_2);
+			           CHARS_LOW_ONLY_ISO_8859_2
+			           CHARS_NOCASE_ISO_8859_2);
 			break;
 		case ISO_8859_7:
 			add_string(CHARS_LOWER_ISO_8859_7
-			           CHARS_LOW_ONLY_ISO_8859_7);
+			           CHARS_LOW_ONLY_ISO_8859_7
+			           CHARS_NOCASE_ISO_8859_7);
 			break;
 		case ISO_8859_15:
 			add_string(CHARS_LOWER_ISO_8859_15
-			           CHARS_LOW_ONLY_ISO_8859_15);
+			           CHARS_LOW_ONLY_ISO_8859_15
+			           CHARS_NOCASE_ISO_8859_15);
 			break;
 		case KOI8_R:
 			add_string(CHARS_LOWER_KOI8_R
-			           CHARS_LOW_ONLY_KOI8_R);
+			           CHARS_LOW_ONLY_KOI8_R
+			           CHARS_NOCASE_KOI8_R);
 			break;
 		}
 		break;
+
 	case 'u': /* upper-case letters */
-		add_range('A', 'Z');
+		/* Rockyou character frequency */
+		add_string("AEIOLRNSTMCDBYHUPKGJVFWZXQ");
 		break;
+
 	case 'U': /* upper-case letters, non-ASCII only */
-		switch (pers_opts.internal_cp) {
+		switch (options.internal_cp) {
 		case CP437:
 			add_string(CHARS_UPPER_CP437
-			           CHARS_UP_ONLY_CP437);
+			           CHARS_UP_ONLY_CP437
+			           CHARS_NOCASE_CP437);
 			break;
 		case CP720:
 			add_string(CHARS_UPPER_CP720
-			           CHARS_UP_ONLY_CP720);
+			           CHARS_UP_ONLY_CP720
+			           CHARS_NOCASE_CP720);
 			break;
 		case CP737:
 			add_string(CHARS_UPPER_CP737
-			           CHARS_UP_ONLY_CP737);
+			           CHARS_UP_ONLY_CP737
+			           CHARS_NOCASE_CP737);
 			break;
 		case CP850:
 			add_string(CHARS_UPPER_CP850
-			           CHARS_UP_ONLY_CP850);
+			           CHARS_UP_ONLY_CP850
+			           CHARS_NOCASE_CP850);
 			break;
 		case CP852:
 			add_string(CHARS_UPPER_CP852
-			           CHARS_UP_ONLY_CP852);
+			           CHARS_UP_ONLY_CP852
+			           CHARS_NOCASE_CP852);
 			break;
 		case CP858:
 			add_string(CHARS_UPPER_CP858
-			           CHARS_UP_ONLY_CP858);
+			           CHARS_UP_ONLY_CP858
+			           CHARS_NOCASE_CP858);
 			break;
 		case CP866:
 			add_string(CHARS_UPPER_CP866
-			           CHARS_UP_ONLY_CP866);
+			           CHARS_UP_ONLY_CP866
+			           CHARS_NOCASE_CP866);
 			break;
 		case CP868:
 			add_string(CHARS_UPPER_CP868
-			           CHARS_UP_ONLY_CP868);
+			           CHARS_UP_ONLY_CP868
+			           CHARS_NOCASE_CP868);
 			break;
 		case CP1250:
 			add_string(CHARS_UPPER_CP1250
-			           CHARS_UP_ONLY_CP1250);
+			           CHARS_UP_ONLY_CP1250
+			           CHARS_NOCASE_CP1250);
 			break;
 		case CP1251:
 			add_string(CHARS_UPPER_CP1251
-			           CHARS_UP_ONLY_CP1251);
+			           CHARS_UP_ONLY_CP1251
+			           CHARS_NOCASE_CP1251);
 			break;
 		case CP1252:
 			add_string(CHARS_UPPER_CP1252
-			           CHARS_UP_ONLY_CP1252);
+			           CHARS_UP_ONLY_CP1252
+			           CHARS_NOCASE_CP1252);
 			break;
 		case CP1253:
 			add_string(CHARS_UPPER_CP1253
-			           CHARS_UP_ONLY_CP1253);
+			           CHARS_UP_ONLY_CP1253
+			           CHARS_NOCASE_CP1253);
 			break;
 		case CP1254:
 			add_string(CHARS_UPPER_CP1254
-			           CHARS_UP_ONLY_CP1254);
+			           CHARS_UP_ONLY_CP1254
+			           CHARS_NOCASE_CP1254);
 			break;
 		case CP1255:
 			add_string(CHARS_UPPER_CP1255
-			           CHARS_UP_ONLY_CP1255);
+			           CHARS_UP_ONLY_CP1255
+			           CHARS_NOCASE_CP1255);
 			break;
 		case CP1256:
 			add_string(CHARS_UPPER_CP1256
-			           CHARS_UP_ONLY_CP1256);
+			           CHARS_UP_ONLY_CP1256
+			           CHARS_NOCASE_CP1256);
 			break;
 		case ISO_8859_1:
 			add_string(CHARS_UPPER_ISO_8859_1
-			           CHARS_UP_ONLY_ISO_8859_1);
+			           CHARS_UP_ONLY_ISO_8859_1
+			           CHARS_NOCASE_ISO_8859_1);
 			break;
 		case ISO_8859_2:
 			add_string(CHARS_UPPER_ISO_8859_2
-			           CHARS_UP_ONLY_ISO_8859_2);
+			           CHARS_UP_ONLY_ISO_8859_2
+			           CHARS_NOCASE_ISO_8859_2);
 			break;
 		case ISO_8859_7:
 			add_string(CHARS_UPPER_ISO_8859_7
-			           CHARS_UP_ONLY_ISO_8859_7);
+			           CHARS_UP_ONLY_ISO_8859_7
+			           CHARS_NOCASE_ISO_8859_7);
 			break;
 		case ISO_8859_15:
 			add_string(CHARS_UPPER_ISO_8859_15
-			           CHARS_UP_ONLY_ISO_8859_15);
+			           CHARS_UP_ONLY_ISO_8859_15
+			           CHARS_NOCASE_ISO_8859_15);
 			break;
 		case KOI8_R:
 			add_string(CHARS_UPPER_KOI8_R
-			           CHARS_UP_ONLY_KOI8_R);
+			           CHARS_UP_ONLY_KOI8_R
+			           CHARS_NOCASE_KOI8_R);
 			break;
 		}
 		break;
+
 	case 'd': /* digits */
-		add_range('0', '9');
+		/* Rockyou character frequency */
+		add_string("1023985467");
 		break;
+
 	case 'D': /* digits, non-ASCII only */
-		switch (pers_opts.internal_cp) {
+		switch (options.internal_cp) {
 		case CP437:
 			add_string(CHARS_DIGITS_CP437);
 			break;
@@ -437,14 +507,14 @@ static char* plhdr2string(char p, int fmt_case)
 			break;
 		}
 		break;
+
 	case 's': /* specials */
-		add_range(32, 47);
-		add_range(58, 64);
-		add_range(91, 96);
-		add_range(123, 126);
+		/* Rockyou character frequency */
+		add_string("._!-* @#/$,\\&+=?)(';<%\"]~:[^`>{}|");
 		break;
+
 	case 'S': /* specials, non-ASCII only */
-		switch (pers_opts.internal_cp) {
+		switch (options.internal_cp) {
 		case CP437:
 			add_string(CHARS_PUNCTUATION_CP437
 			           CHARS_SPECIALS_CP437
@@ -547,36 +617,41 @@ static char* plhdr2string(char p, int fmt_case)
 			break;
 		}
 		break;
+
 	case 'B': /* All high-bit */
+
 	case 'h': /* deprecated alias for B */
 		add_range(0x80, 0xff);
 		break;
+
 	case 'b': /* All (except NULL which we can't handle) */
+
 	case 'H': /* deprecated alias for b */
 		add_range(0x01, 0xff);
 		break;
+
 	case 'a': /* Printable ASCII */
+		/* Rockyou ASCII character frequency */
 		if (fmt_case)
-			add_range(0x20, 0x7e);
-		else {
-			add_range(0x20, 0x40);
-			add_range(0x5b, 0x7e);
-		}
+			add_string("ae1ionrls02tm3c98dy54hu6b7kgpjvfwzAxEIOLRNSTMqC.DBYH_!UPKGJ-* @VFWZ#/X$,\\&+=Q?)(';<%\"]~:[^`>{}|");
+		else
+			add_string("ae1ionrls02tm3c98dy54hu6b7kgpjvfwzxq._!-* @#/$,\\&+=?)(';<%\"]~:[^`>{}|");
 		break;
+
 	case 'A': /* All valid chars in codepage (including ASCII) */
+		/* Rockyou ASCII character frequency */
 		if (fmt_case)
-			add_range(0x20, 0x7e);
-		else {
-			add_range(0x20, 0x40);
-			add_range(0x5b, 0x7e);
-		}
-		switch (pers_opts.internal_cp) {
+			add_string("ae1ionrls02tm3c98dy54hu6b7kgpjvfwzAxEIOLRNSTMqC.DBYH_!UPKGJ-* @VFWZ#/X$,\\&+=Q?)(';<%\"]~:[^`>{}|");
+		else
+			add_string("ae1ionrls02tm3c98dy54hu6b7kgpjvfwzxq._!-* @#/$,\\&+=?)(';<%\"]~:[^`>{}|");
+		switch (options.internal_cp) {
 		case CP437:
 			if (fmt_case)
 				add_string(CHARS_ALPHA_CP437);
 			else
 				add_string(CHARS_LOWER_CP437
-				           CHARS_LOW_ONLY_CP437);
+				           CHARS_LOW_ONLY_CP437
+				           CHARS_NOCASE_CP437);
 			add_string(CHARS_DIGITS_CP437
 			           CHARS_PUNCTUATION_CP437
 			           CHARS_SPECIALS_CP437
@@ -587,7 +662,8 @@ static char* plhdr2string(char p, int fmt_case)
 				add_string(CHARS_ALPHA_CP720);
 			else
 				add_string(CHARS_LOWER_CP720
-				           CHARS_LOW_ONLY_CP720);
+				           CHARS_LOW_ONLY_CP720
+				           CHARS_NOCASE_CP720);
 			add_string(CHARS_DIGITS_CP720
 			           CHARS_PUNCTUATION_CP720
 			           CHARS_SPECIALS_CP720
@@ -598,7 +674,8 @@ static char* plhdr2string(char p, int fmt_case)
 				add_string(CHARS_ALPHA_CP737);
 			else
 				add_string(CHARS_LOWER_CP737
-				           CHARS_LOW_ONLY_CP737);
+				           CHARS_LOW_ONLY_CP737
+				           CHARS_NOCASE_CP737);
 			add_string(CHARS_DIGITS_CP737
 			           CHARS_PUNCTUATION_CP737
 			           CHARS_SPECIALS_CP737
@@ -609,7 +686,8 @@ static char* plhdr2string(char p, int fmt_case)
 				add_string(CHARS_ALPHA_CP850);
 			else
 				add_string(CHARS_LOWER_CP850
-				           CHARS_LOW_ONLY_CP850);
+				           CHARS_LOW_ONLY_CP850
+				           CHARS_NOCASE_CP850);
 			add_string(CHARS_DIGITS_CP850
 			           CHARS_PUNCTUATION_CP850
 			           CHARS_SPECIALS_CP850
@@ -620,7 +698,8 @@ static char* plhdr2string(char p, int fmt_case)
 				add_string(CHARS_ALPHA_CP852);
 			else
 				add_string(CHARS_LOWER_CP852
-				           CHARS_LOW_ONLY_CP852);
+				           CHARS_LOW_ONLY_CP852
+				           CHARS_NOCASE_CP852);
 			add_string(CHARS_DIGITS_CP852
 			           CHARS_PUNCTUATION_CP852
 			           CHARS_SPECIALS_CP852
@@ -631,7 +710,8 @@ static char* plhdr2string(char p, int fmt_case)
 				add_string(CHARS_ALPHA_CP858);
 			else
 				add_string(CHARS_LOWER_CP858
-				           CHARS_LOW_ONLY_CP858);
+				           CHARS_LOW_ONLY_CP858
+				           CHARS_NOCASE_CP858);
 			add_string(CHARS_DIGITS_CP858
 			           CHARS_PUNCTUATION_CP858
 			           CHARS_SPECIALS_CP858
@@ -642,7 +722,8 @@ static char* plhdr2string(char p, int fmt_case)
 				add_string(CHARS_ALPHA_CP866);
 			else
 				add_string(CHARS_LOWER_CP866
-				           CHARS_LOW_ONLY_CP866);
+				           CHARS_LOW_ONLY_CP866
+				           CHARS_NOCASE_CP866);
 			add_string(CHARS_DIGITS_CP866
 			           CHARS_PUNCTUATION_CP866
 			           CHARS_SPECIALS_CP866
@@ -653,7 +734,8 @@ static char* plhdr2string(char p, int fmt_case)
 				add_string(CHARS_ALPHA_CP868);
 			else
 				add_string(CHARS_LOWER_CP868
-				           CHARS_LOW_ONLY_CP868);
+				           CHARS_LOW_ONLY_CP868
+				           CHARS_NOCASE_CP868);
 			add_string(CHARS_DIGITS_CP868
 			           CHARS_PUNCTUATION_CP868
 			           CHARS_SPECIALS_CP868
@@ -664,7 +746,8 @@ static char* plhdr2string(char p, int fmt_case)
 				add_string(CHARS_ALPHA_CP1250);
 			else
 				add_string(CHARS_LOWER_CP1250
-				           CHARS_LOW_ONLY_CP1250);
+				           CHARS_LOW_ONLY_CP1250
+				           CHARS_NOCASE_CP1250);
 			add_string(CHARS_DIGITS_CP1250
 			           CHARS_PUNCTUATION_CP1250
 			           CHARS_SPECIALS_CP1250
@@ -675,7 +758,8 @@ static char* plhdr2string(char p, int fmt_case)
 				add_string(CHARS_ALPHA_CP1251);
 			else
 				add_string(CHARS_LOWER_CP1251
-				           CHARS_LOW_ONLY_CP1251);
+				           CHARS_LOW_ONLY_CP1251
+				           CHARS_NOCASE_CP1251);
 			add_string(CHARS_DIGITS_CP1251
 			           CHARS_PUNCTUATION_CP1251
 			           CHARS_SPECIALS_CP1251
@@ -686,7 +770,8 @@ static char* plhdr2string(char p, int fmt_case)
 				add_string(CHARS_ALPHA_CP1252);
 			else
 				add_string(CHARS_LOWER_CP1252
-				           CHARS_LOW_ONLY_CP1252);
+				           CHARS_LOW_ONLY_CP1252
+				           CHARS_NOCASE_CP1252);
 			add_string(CHARS_DIGITS_CP1252
 			           CHARS_PUNCTUATION_CP1252
 			           CHARS_SPECIALS_CP1252
@@ -697,7 +782,8 @@ static char* plhdr2string(char p, int fmt_case)
 				add_string(CHARS_ALPHA_CP1253);
 			else
 				add_string(CHARS_LOWER_CP1253
-				           CHARS_LOW_ONLY_CP1253);
+				           CHARS_LOW_ONLY_CP1253
+				           CHARS_NOCASE_CP1253);
 			add_string(CHARS_DIGITS_CP1253
 			           CHARS_PUNCTUATION_CP1253
 			           CHARS_SPECIALS_CP1253
@@ -708,7 +794,8 @@ static char* plhdr2string(char p, int fmt_case)
 				add_string(CHARS_ALPHA_CP1254);
 			else
 				add_string(CHARS_LOWER_CP1254
-				           CHARS_LOW_ONLY_CP1254);
+				           CHARS_LOW_ONLY_CP1254
+				           CHARS_NOCASE_CP1254);
 			add_string(CHARS_DIGITS_CP1254
 			           CHARS_PUNCTUATION_CP1254
 			           CHARS_SPECIALS_CP1254
@@ -719,7 +806,8 @@ static char* plhdr2string(char p, int fmt_case)
 				add_string(CHARS_ALPHA_CP1255);
 			else
 				add_string(CHARS_LOWER_CP1255
-				           CHARS_LOW_ONLY_CP1255);
+				           CHARS_LOW_ONLY_CP1255
+				           CHARS_NOCASE_CP1255);
 			add_string(CHARS_DIGITS_CP1255
 			           CHARS_PUNCTUATION_CP1255
 			           CHARS_SPECIALS_CP1255
@@ -730,7 +818,8 @@ static char* plhdr2string(char p, int fmt_case)
 				add_string(CHARS_ALPHA_CP1256);
 			else
 				add_string(CHARS_LOWER_CP1256
-				           CHARS_LOW_ONLY_CP1256);
+				           CHARS_LOW_ONLY_CP1256
+				           CHARS_NOCASE_CP1256);
 			add_string(CHARS_DIGITS_CP1256
 			           CHARS_PUNCTUATION_CP1256
 			           CHARS_SPECIALS_CP1256
@@ -741,7 +830,8 @@ static char* plhdr2string(char p, int fmt_case)
 				add_string(CHARS_ALPHA_ISO_8859_1);
 			else
 				add_string(CHARS_LOWER_ISO_8859_1
-				           CHARS_LOW_ONLY_ISO_8859_1);
+				           CHARS_LOW_ONLY_ISO_8859_1
+				           CHARS_NOCASE_ISO_8859_1);
 			add_string(CHARS_DIGITS_ISO_8859_1
 			           CHARS_PUNCTUATION_ISO_8859_1
 			           CHARS_SPECIALS_ISO_8859_1
@@ -752,7 +842,8 @@ static char* plhdr2string(char p, int fmt_case)
 				add_string(CHARS_ALPHA_ISO_8859_2);
 			else
 				add_string(CHARS_LOWER_ISO_8859_2
-				           CHARS_LOW_ONLY_ISO_8859_2);
+				           CHARS_LOW_ONLY_ISO_8859_2
+				           CHARS_NOCASE_ISO_8859_2);
 			add_string(CHARS_DIGITS_ISO_8859_2
 			           CHARS_PUNCTUATION_ISO_8859_2
 			           CHARS_SPECIALS_ISO_8859_2
@@ -763,7 +854,8 @@ static char* plhdr2string(char p, int fmt_case)
 				add_string(CHARS_ALPHA_ISO_8859_7);
 			else
 				add_string(CHARS_LOWER_ISO_8859_7
-				           CHARS_LOW_ONLY_ISO_8859_7);
+				           CHARS_LOW_ONLY_ISO_8859_7
+				           CHARS_NOCASE_ISO_8859_7);
 			add_string(CHARS_DIGITS_ISO_8859_7
 			           CHARS_PUNCTUATION_ISO_8859_7
 			           CHARS_SPECIALS_ISO_8859_7
@@ -774,7 +866,8 @@ static char* plhdr2string(char p, int fmt_case)
 				add_string(CHARS_ALPHA_ISO_8859_15);
 			else
 				add_string(CHARS_LOWER_ISO_8859_15
-				           CHARS_LOW_ONLY_ISO_8859_15);
+				           CHARS_LOW_ONLY_ISO_8859_15
+				           CHARS_NOCASE_ISO_8859_15);
 			add_string(CHARS_DIGITS_ISO_8859_15
 			           CHARS_PUNCTUATION_ISO_8859_15
 			           CHARS_SPECIALS_ISO_8859_15
@@ -785,7 +878,8 @@ static char* plhdr2string(char p, int fmt_case)
 				add_string(CHARS_ALPHA_KOI8_R);
 			else
 				add_string(CHARS_LOWER_KOI8_R
-				           CHARS_LOW_ONLY_KOI8_R);
+				           CHARS_LOW_ONLY_KOI8_R
+				           CHARS_NOCASE_KOI8_R);
 			add_string(CHARS_DIGITS_KOI8_R
 			           CHARS_PUNCTUATION_KOI8_R
 			           CHARS_SPECIALS_KOI8_R
@@ -878,7 +972,7 @@ static char* expand_plhdr(char *string, int fmt_case)
  *
  * This function must pass any escaped characters on, as-is (still escaped).
  */
-static void parse_braces(char *mask, parsed_ctx *parsed_mask)
+static void parse_braces(char *mask, mask_parsed_ctx *parsed_mask)
 {
 	int i, j ,k;
 	int cl_br_enc;
@@ -939,7 +1033,7 @@ static void parse_braces(char *mask, parsed_ctx *parsed_mask)
  *
  * This function must pass any escaped characters on, as-is (still escaped).
  */
-static void parse_qtn(char *mask, parsed_ctx *parsed_mask)
+static void parse_qtn(char *mask, mask_parsed_ctx *parsed_mask)
 {
 	int i, j, k;
 
@@ -973,7 +1067,7 @@ cont:
 	}
 }
 
-static int search_stack(parsed_ctx *parsed_mask, int loc)
+static int search_stack(mask_parsed_ctx *parsed_mask, int loc)
 {
 	int t;
 
@@ -991,7 +1085,7 @@ static int search_stack(parsed_ctx *parsed_mask, int loc)
  * Maps the position of a range in a mask to its actual postion in a key.
  * Offset for wordlist + mask is not taken into account.
  */
-static int calc_pos_in_key(const char *mask, parsed_ctx *parsed_mask,
+static int calc_pos_in_key(const char *mask, mask_parsed_ctx *parsed_mask,
                            int mask_loc)
 {
 	int i, ret_pos;
@@ -1019,12 +1113,12 @@ static int calc_pos_in_key(const char *mask, parsed_ctx *parsed_mask,
  * This function will finally remove any escape characters (after honoring
  * them of course, if they protected any of our specials)
  */
-static void init_cpu_mask(const char *mask, parsed_ctx *parsed_mask,
-                          cpu_mask_context *cpu_mask_ctx, struct db_main *db)
+static void init_cpu_mask(const char *mask, mask_parsed_ctx *parsed_mask,
+                          mask_cpu_context *cpu_mask_ctx)
 {
 	int i, qtn_ctr, op_ctr, cl_ctr;
 	char *p;
-	int fmt_case = (db->format->params.flags & FMT_CASE);
+	int fmt_case = (mask_fmt->params.flags & FMT_CASE);
 
 #ifdef MASK_DEBUG
 	fprintf(stderr, "%s(%s)\n", __FUNCTION__, mask);
@@ -1180,7 +1274,7 @@ static void init_cpu_mask(const char *mask, parsed_ctx *parsed_mask,
 	cpu_mask_ctx->active_positions[i] = 1;
 }
 
-static void save_restore(cpu_mask_context *cpu_mask_ctx, int range_idx, int ch)
+static void save_restore(mask_cpu_context *cpu_mask_ctx, int range_idx, int ch)
 {
 	static int bckp_range_idx, bckp_next, toggle;
 
@@ -1200,17 +1294,23 @@ static void save_restore(cpu_mask_context *cpu_mask_ctx, int range_idx, int ch)
 }
 
 /* truncates mask after range idx */
-static void truncate_mask(cpu_mask_context *cpu_mask_ctx, int range_idx)
+static void truncate_mask(mask_cpu_context *cpu_mask_ctx, int range_idx)
 {
 	int i;
+
+#ifdef MASK_DEBUG
+	fprintf(stderr, "%s(%d %d)\n", __FUNCTION__, range_idx, mask_max_skip_loc);
+#endif
+
 	if (range_idx < mask_max_skip_loc && mask_max_skip_loc != -1) {
 		fprintf(stderr, "Format internal ranges cannot be truncated!\n");
 		fprintf(stderr, "Use a bigger key length or non-gpu format.\n");
 		error();
 	}
 
+	mask_tot_cand = mask_int_cand.num_int_cand;
+
 	if (range_idx == -1) {
-		mask_tot_cand = 1;
 		cpu_mask_ctx->cpu_count = 0;
 		cpu_mask_ctx->ps1 = MAX_NUM_MASK_PLHDR;
 		return;
@@ -1218,7 +1318,6 @@ static void truncate_mask(cpu_mask_context *cpu_mask_ctx, int range_idx)
 
 	cpu_mask_ctx->ranges[range_idx].next = MAX_NUM_MASK_PLHDR;
 
-	mask_tot_cand = 1;
 	cpu_mask_ctx->cpu_count = 0;
 	cpu_mask_ctx->ps1 = MAX_NUM_MASK_PLHDR;
 	for (i = 0; i <= range_idx; i++)
@@ -1236,10 +1335,15 @@ static void truncate_mask(cpu_mask_context *cpu_mask_ctx, int range_idx)
  * Returns the template of the keys corresponding to the mask.
  */
 static char* generate_template_key(char *mask, const char *key, int key_len,
-				   parsed_ctx *parsed_mask,
-				   cpu_mask_context *cpu_mask_ctx)
+				   mask_parsed_ctx *parsed_mask,
+				   mask_cpu_context *cpu_mask_ctx)
 {
 	int i, k, t, j, l, offset;
+
+#ifdef MASK_DEBUG
+	fprintf(stderr, "%s(%s) key %s len %d (max %d)\n", __FUNCTION__, mask, key, key_len, max_keylen);
+#endif
+
 	i = 0, k = 0, j = 0, l = 0, offset = 0;
 
 	while (template_key_offsets[l] != -1)
@@ -1305,25 +1409,14 @@ static MAYBE_INLINE char* mask_cp_to_utf8(char *in)
 	static char out[PLAINTEXT_BUFFER_SIZE + 1];
 
 	if (mask_has_8bit &&
-	    (pers_opts.internal_cp != UTF_8 && pers_opts.target_enc == UTF_8))
+	    (options.internal_cp != UTF_8 && options.target_enc == UTF_8))
 		return cp_to_utf8_r(in, out, fmt_maxlen);
 
 	return in;
 }
 
-static int generate_keys(cpu_mask_context *cpu_mask_ctx,
-			  unsigned long long *my_candidates)
-{
-	int ps1 = MAX_NUM_MASK_PLHDR, ps2 = MAX_NUM_MASK_PLHDR,
-	    ps3 = MAX_NUM_MASK_PLHDR, ps4 = MAX_NUM_MASK_PLHDR, ps ;
-	int start1, start2, start3, start4;
-
 #define ranges(i) cpu_mask_ctx->ranges[i]
 
-#define process_key(key)						\
-	if (ext_filter(template_key))					\
-		if ((crk_process_key(mask_cp_to_utf8(template_key))))   \
-			return 1;
 /*
  * Calculate next state of remaing placeholders, working
  * similar to counters.
@@ -1358,6 +1451,23 @@ static int generate_keys(cpu_mask_context *cpu_mask_ctx,
 	template_key[ranges(ps).pos + ranges(ps).offset] =		\
 		start ? start + ranges(ps).iter:			\
 		ranges(ps).chars[ranges(ps).iter];
+
+static int generate_keys(mask_cpu_context *cpu_mask_ctx,
+			  unsigned long long *my_candidates)
+{
+	char key_e[PLAINTEXT_BUFFER_SIZE];
+	char *key;
+	int ps1 = MAX_NUM_MASK_PLHDR, ps2 = MAX_NUM_MASK_PLHDR,
+	    ps3 = MAX_NUM_MASK_PLHDR, ps4 = MAX_NUM_MASK_PLHDR, ps ;
+	int start1, start2, start3, start4;
+
+#define process_key(key_i)	  \
+	do { \
+		key = key_i; \
+		if (!f_filter || ext_filter_body(key_i, key = key_e)) \
+			if ((crk_process_key(mask_cp_to_utf8(key)))) \
+				return 1; \
+	} while(0)
 
 	ps1 = cpu_mask_ctx->ps1;
 	ps2 = cpu_mask_ctx->ranges[ps1].next;
@@ -1421,16 +1531,96 @@ static int generate_keys(cpu_mask_context *cpu_mask_ctx,
 	}
 done:
 	return 0;
-#undef ranges
 #undef process_key
+}
+
+static int bench_generate_keys(mask_cpu_context *cpu_mask_ctx,
+                               unsigned long long *my_candidates)
+{
+	int ps1 = MAX_NUM_MASK_PLHDR, ps2 = MAX_NUM_MASK_PLHDR,
+	    ps3 = MAX_NUM_MASK_PLHDR, ps4 = MAX_NUM_MASK_PLHDR, ps ;
+	int start1, start2, start3, start4;
+
+#define process_key(key)                                            \
+    mask_fmt->methods.set_key(mask_cp_to_utf8(template_key),        \
+                              mask_bench_index++);                  \
+    if (mask_bench_index >= mask_fmt->params.max_keys_per_crypt) {  \
+        mask_bench_index = 0;                                       \
+        return 1;                                                   \
+    }
+
+	ps1 = cpu_mask_ctx->ps1;
+	ps2 = cpu_mask_ctx->ranges[ps1].next;
+	ps3 = cpu_mask_ctx->ranges[ps2].next;
+	ps4 = cpu_mask_ctx->ranges[ps3].next;
+
+	if (cpu_mask_ctx->cpu_count < 4) {
+		ps = ps1;
+
+		/* Initialize the placeholders */
+		init_key(ps);
+
+		while (1) {
+			if (options.node_count &&
+			    !(options.flags & FLG_MASK_STACKED) &&
+			    !(*my_candidates)--)
+				goto done;
+
+			process_key(template_key);
+			ps = ps1;
+			next_state(ps);
+		}
+	}
+
+	else if (cpu_mask_ctx->cpu_count >= 4) {
+		ps = ranges(ps4).next;
+
+	/* Initialize the remaining placeholders other than the first four */
+		init_key(ps);
+
+		while (1) {
+			start1 = ranges(ps1).start;
+			start2 = ranges(ps2).start;
+			start3 = ranges(ps3).start;
+			start4 = ranges(ps4).start;
+			/* Iterate over first three placeholders */
+			for (iterate_over(ps4)) {
+				set_template_key(ps4, start4);
+				for (iterate_over(ps3)) {
+					set_template_key(ps3, start3);
+					for (iterate_over(ps2)) {
+						set_template_key(ps2, start2);
+						for (iterate_over(ps1)) {
+							if (options.node_count &&
+							    !(options.flags & FLG_MASK_STACKED) &&
+							    !(*my_candidates)--)
+								goto done;
+							set_template_key(ps1, start1);
+							process_key(template_key);
+						}
+					ranges(ps1).iter = 0;
+					}
+				ranges(ps2).iter = 0;
+				}
+			ranges(ps3).iter = 0;
+			}
+			ranges(ps4).iter = 0;
+			ps = ranges(ps4).next;
+			next_state(ps);
+		}
+	}
+done:
+	return 0;
+#undef process_key
+}
+#undef ranges
 #undef next_state
 #undef init_key
 #undef iterate_over
 #undef set_template_key
-}
 
 /* Skips iteration for positions stored in arr */
-static void skip_position(cpu_mask_context *cpu_mask_ctx, int *arr)
+static void skip_position(mask_cpu_context *cpu_mask_ctx, int *arr)
 {
 	int i;
 
@@ -1470,7 +1660,7 @@ static void skip_position(cpu_mask_context *cpu_mask_ctx, int *arr)
 		}
 }
 
-static unsigned long long divide_work(cpu_mask_context *cpu_mask_ctx)
+static unsigned long long divide_work(mask_cpu_context *cpu_mask_ctx)
 {
 	unsigned long long offset, my_candidates, total_candidates, ctr;
 	int ps;
@@ -1529,7 +1719,7 @@ static double get_progress(void)
 	if (cand_length)
 		try -= cand_length;
 
-	return 100.0 * try / (double)((mask_tot_cand * mask_int_cand.num_int_cand) / num_nodes);
+	return 100.0 * try / (double)(mask_tot_cand / num_nodes);
 }
 
 void mask_save_state(FILE *file)
@@ -1554,7 +1744,7 @@ int mask_restore_state(FILE *file)
 	unsigned long long ull;
 	int fail = !(options.flags & FLG_MASK_STACKED);
 
-	if (fscanf(file, ""LLu"\n", &ull) == 1)
+	if (fscanf(file, LLu"\n", &ull) == 1)
 		cand = ull;
 	else
 		return fail;
@@ -1574,11 +1764,10 @@ int mask_restore_state(FILE *file)
 			restored_len = d;
 		else
 			return fail;
-		if (fscanf(file, ""LLu"\n", &ull) == 1)
+		if (fscanf(file, LLu"\n", &ull) == 1)
 			rec_cl = ull;
-		/* FIXME: enable the below at 2015-01-01 or later */
-		//else
-		//	return fail;
+		else
+			return fail;
 	}
 
 	for (i = 0; i < cpu_mask_ctx.count; i++)
@@ -1594,6 +1783,10 @@ void mask_fix_state(void)
 {
 	int i;
 
+	if (parent_fix_state_pending) {
+		crk_fix_state();
+		parent_fix_state_pending = 0;
+	}
 	rec_cand = cand;
 	rec_ctx.count = cpu_mask_ctx.count;
 	rec_ctx.offset = cpu_mask_ctx.offset;
@@ -1617,7 +1810,7 @@ void remove_slash(char *mask)
 	}
 }
 
-char *stretch_mask(char *mask, parsed_ctx *parsed_mask)
+char *stretch_mask(char *mask, mask_parsed_ctx *parsed_mask)
 {
 	char *stretched_mask;
 	int i, j, k;
@@ -1703,9 +1896,20 @@ void mask_init(struct db_main *db, char *unprocessed_mask)
 {
 	int i, max_static_range;
 
-	fmt_maxlen = db->format->params.plaintext_length;
+	mask_fmt = db->format;
+
+	fmt_maxlen = mask_fmt->params.plaintext_length;
+
+	if (options.req_minlength >= 0 && !options.req_maxlength)
+		options.req_maxlength = fmt_maxlen;
+	else if (options.req_maxlength > 0 && options.req_minlength == -1)
+		options.req_minlength = mask_fmt->params.plaintext_min_length;
+
 	max_keylen = options.req_maxlength ?
 		options.req_maxlength : fmt_maxlen;
+
+	if (options.flags & FLG_TEST_CHK && !(options.flags & FLG_MASK_STACKED))
+		max_keylen = strlen(mask_fmt->params.tests[0].plaintext);
 
 	if ((options.flags & FLG_MASK_STACKED) && max_keylen < 2) {
 		if (john_main_process)
@@ -1747,7 +1951,7 @@ void mask_init(struct db_main *db, char *unprocessed_mask)
 	template_key = (char*)mem_alloc(0x400);
 
 	/* Handle command-line (or john.conf) masks given in UTF-8 */
-	if (pers_opts.input_enc == UTF_8 && pers_opts.internal_cp != UTF_8) {
+	if (options.input_enc == UTF_8 && options.internal_cp != UTF_8) {
 		if (valid_utf8((UTF8*)mask) > 1)
 			utf8_to_cp_r(mask, mask, strlen(mask));
 		for (i = 0; i < MAX_NUM_CUST_PLHDR; i++)
@@ -1771,7 +1975,7 @@ void mask_init(struct db_main *db, char *unprocessed_mask)
 	 * UTF-8 is not supported in mask mode unless -internal-codepage is used
 	 * except for UTF-16 formats (eg. NT).
 	 */
-	if (pers_opts.internal_cp == UTF_8 && valid_utf8((UTF8*)mask) > 1) {
+	if (options.internal_cp == UTF_8 && valid_utf8((UTF8*)mask) > 1) {
 		if (john_main_process)
 			fprintf(stderr,
 			        "Mask contains UTF-8 characters; --internal-codepage is required!\n");
@@ -1843,7 +2047,7 @@ void mask_init(struct db_main *db, char *unprocessed_mask)
 		}
 	}
 	if (options.flags & FLG_MASK_STACKED) {
-		mask_has_8bit = 1;
+		mask_has_8bit = 1; /* Parent mode's word might have 8-bit */
 		if (mask_add_len > max_keylen - 1)
 			mask_add_len = max_keylen - 1;
 
@@ -1896,7 +2100,7 @@ void mask_init(struct db_main *db, char *unprocessed_mask)
 	fprintf(stderr, "Custom masks expanded (this is 'mask' when passed to "
 	        "init_cpu_mask()):\n%s\n", mask);
 #endif
-	init_cpu_mask(mask, &parsed_mask, &cpu_mask_ctx, db);
+	init_cpu_mask(mask, &parsed_mask, &cpu_mask_ctx);
 
 	mask_calc_combination(&cpu_mask_ctx, max_static_range);
 
@@ -1918,7 +2122,7 @@ void mask_init(struct db_main *db, char *unprocessed_mask)
 			    cpu_mask_ctx.ranges[i].pos < max_keylen)
 				cand *= cpu_mask_ctx.ranges[i].count;
 	}
-	mask_tot_cand = cand;
+	mask_tot_cand = cand * mask_int_cand.num_int_cand;
 }
 
 void mask_crk_init(struct db_main *db)
@@ -1947,12 +2151,13 @@ void mask_done()
 			int num_nodes = options.node_count ?
 				options.node_count : 1;
 			mask_tot_cand = (((unsigned long long)status.cands.hi << 32) +
-				status.cands.lo) / mask_int_cand.num_int_cand * num_nodes;
+				status.cands.lo) * num_nodes;
 			cand_length = 0;
 		}
-		crk_done();
-
-		rec_done(event_abort);
+		if (!(options.flags & FLG_TEST_CHK)) {
+			crk_done();
+			rec_done(event_abort);
+		}
 	}
 
 	MEM_FREE(template_key);
@@ -1961,8 +2166,8 @@ void mask_done()
 		MEM_FREE(mask_skip_ranges);
 	if (mask_int_cand.int_cand)
 		MEM_FREE(mask_int_cand.int_cand);
-	mask_skip_ranges = NULL;
-	mask_int_cand.int_cand = NULL;
+	mask_int_cand.num_int_cand = 0;
+	mask_int_cand_target = 0;
 }
 
 int do_mask_crack(const char *extern_key)
@@ -2016,8 +2221,13 @@ int do_mask_crack(const char *extern_key)
 
 			template_key_len = strlen(template_key);
 
-			if (generate_keys(&cpu_mask_ctx, &cand))
-				return 1;
+			if (options.flags & FLG_TEST_CHK) {
+				if (bench_generate_keys(&cpu_mask_ctx, &cand))
+					return 1;
+			} else {
+				if (generate_keys(&cpu_mask_ctx, &cand))
+					return 1;
+			}
 
 			if (i < max_len && cfg_get_bool("Mask", NULL,
 			                                "MaskLengthIterStatus", 1))
@@ -2036,29 +2246,48 @@ int do_mask_crack(const char *extern_key)
 		i = 0;
 		while(template_key_offsets[i] != -1) {
 			int offset = template_key_offsets[i] & 0xffff;
-			unsigned char is_lower =  (template_key_offsets[i++] >> 16)
-				== 'w';
+			unsigned char toggle =  (template_key_offsets[i++] >> 16) == 'W';
 			int cpy_len = max_keylen - offset;
+
 			cpy_len = cpy_len > key_len ? key_len : cpy_len;
-			if (is_lower)
-			memcpy(template_key + offset, extern_key, cpy_len);
+			if (!toggle)
+				memcpy(template_key + offset, extern_key, cpy_len);
 			else {
 				int z;
 				for (z = 0; z < cpy_len; ++z) {
-					if (islower(ARCH_INDEX(extern_key[z])))
+					if (enc_islower(extern_key[z]))
 						template_key[offset + z] =
-							toupper(ARCH_INDEX(extern_key[z]));
+							enc_toupper(extern_key[z]);
 					else
 						template_key[offset + z] =
-							tolower(ARCH_INDEX(extern_key[z]));
+							enc_tolower(extern_key[z]);
 				}
 			}
 		}
-		if (generate_keys(&cpu_mask_ctx, &cand))
-			return 1;
+		if (options.flags & FLG_TEST_CHK) {
+			if (bench_generate_keys(&cpu_mask_ctx, &cand))
+				return 1;
+		} else {
+			if (generate_keys(&cpu_mask_ctx, &cand))
+				return 1;
+		}
 	}
-	if (!event_abort && (options.flags & FLG_MASK_STACKED))
-		crk_fix_state();
+
+	if (options.flags & FLG_MASK_STACKED) {
+		if (options.flags & FLG_WORDLIST_CHK)
+			wordlist_hybrid_fix_state();
+		else if (options.flags & FLG_MKV_CHK)
+			mkv_hybrid_fix_state();
+		else if (options.flags & FLG_INC_CHK)
+			inc_hybrid_fix_state();
+#if HAVE_LIBGMP || HAVE_INT128 || HAVE___INT128 || HAVE___INT128_T
+		else if (options.flags & FLG_PRINCE_CHK)
+			pp_hybrid_fix_state();
+#endif
+		else if (options.flags & FLG_EXTERNAL_CHK)
+			ext_hybrid_fix_state();
+		parent_fix_state_pending = 1;
+	}
 
 	return event_abort;
 }

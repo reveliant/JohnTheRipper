@@ -31,6 +31,7 @@ john_register_one(&FMT_STRUCT);
 #include "common-opencl.h"
 #include "config.h"
 #include "options.h"
+#include "salted_sha1_common.h"
 #include "mask_ext.h"
 #include "base64.h"
 #include "bt_interface.h"
@@ -80,18 +81,6 @@ static cl_uint *zero_buffer;
 #define MIN_KEYS_PER_CRYPT      1
 #define MAX_KEYS_PER_CRYPT      1
 
-#define get_power_of_two(v)	\
-{				\
-	v--;			\
-	v |= v >> 1;		\
-	v |= v >> 2;		\
-	v |= v >> 4;		\
-	v |= v >> 8;		\
-	v |= v >> 16;		\
-	v |= v >> 32;		\
-	v++;			\
-}
-
 struct s_salt
 {
 	union {
@@ -104,37 +93,6 @@ struct s_salt
 static struct s_salt saved_salt[1];
 
 #include "memdbg.h"
-
-static struct fmt_tests tests[] = {
-// Test hashes originally(?) in OPENLDAPS_fmt (openssha) (salt length 4)
-	{"{SSHA}bPXG4M1KkwZh2Hbgnuoszvpat0T/OS86", "thales"},
-	{"{SSHA}hHSEPW3qeiOo5Pl2MpHQCXh0vgfyVR/X", "test1"},
-	{"{SSHA}pXp4yIiRmppvKYn7cKCT+lngG4qELq4h", "test2"},
-	{"{SSHA}Bv8tu3wB8WTMJj3tcOsl1usm5HzGwEmv", "test3"},
-	{"{SSHA}kXyh8wLCKbN+QRbL2F2aUbkP62BJ/bRg", "lapin"},
-	{"{SSHA}rnMVxsf1YJPg0L5CBhbVLIsJF+o/vkoE", "canard"},
-	{"{SSHA}Uf2x9YxSWZZNAi2t1QXbG2PmT07AtURl", "chien"},
-	{"{SSHA}XXGLZ7iKpYSBpF6EwoeTl27U0L/kYYsY", "hibou"},
-	{"{SSHA}HYRPmcQIIzIIg/c1L8cZKlYdNpyeZeml", "genou"},
-	{"{SSHA}Zm/0Wll7rLNpBU4HFUKhbASpXr94eSTc", "caillou"},
-	{"{SSHA}Qc9OB+aEFA/mJ5MNy0AB4hRIkNiAbqDb", "doudou"},
-
-// Test vectors originally in NSLDAPS_fmt (ssha) (salt length 8)
-	{"{SSHA}WTT3B9Jjr8gOt0Q7WMs9/XvukyhTQj0Ns0jMKQ==", "Password9"},
-	{"{SSHA}ypkVeJKLzbXakEpuPYbn+YBnQvFmNmB+kQhmWQ==", "qVv3uQ45"},
-	{"{SSHA}cKFVqtf358j0FGpPsEIK1xh3T0mtDNV1kAaBNg==", "salles"},
-	{"{SSHA}W3ipFGmzS3+j6/FhT7ZC39MIfqFcct9Ep0KEGA==", "asddsa123"},
-	{"{SSHA}YbB2R1D2AlzYc9wk/YPtslG7NoiOWaoMOztLHA==", "ripthispassword"},
-
-/*
- * These two were found in john-1.6-nsldaps4.diff.gz
- */
-	{"{SSHA}/EExmSfmhQSPHDJaTxwQSdb/uPpzYWx0ZXI=", "secret"},
-	{"{SSHA}gVK8WC9YyFT1gMsQHTGCgT3sSv5zYWx0", "secret"},
-
-	{NULL}
-};
-
 
 struct fmt_main FMT_STRUCT;
 
@@ -343,7 +301,7 @@ static void init_kernel(unsigned int num_ld_hashes, char *bitmap_para)
 #endif
 	, offset_table_size, hash_table_size, shift64_ot_sz, shift64_ht_sz,
 	shift128_ot_sz, shift128_ht_sz, num_ld_hashes,
-	mask_int_cand.num_int_cand, bitmap_para, is_static_gpu_mask,
+	mask_int_cand.num_int_cand, bitmap_para, mask_gpu_is_static,
 	(unsigned long long)const_cache_size, static_gpu_locations[0]
 #if 1 < MASK_FMT_INT_PLHDR
 	, static_gpu_locations[1]
@@ -366,34 +324,9 @@ static void init(struct fmt_main *_self)
 {
 	self = _self;
 	num_loaded_hashes = 0;
-	mask_int_cand_target = 10000;
 
 	opencl_prepare_dev(gpu_id);
-}
-
-static int valid(char *ciphertext, struct fmt_main *self)
-{
-	int len, len2;
-	char *p;
-
-	if (strncasecmp(ciphertext, NSLDAP_MAGIC, NSLDAP_MAGIC_LENGTH))
-		return 0;
-	ciphertext += NSLDAP_MAGIC_LENGTH;
-
-	len = strlen(ciphertext);
-	len2 = (len + 3) / 4 * 3 - BINARY_SIZE;
-	p = &ciphertext[len];
-	while (*--p == '=')
-		len2--;
-	if (len2 < 1 || (len2+3)/4*3 > MAX_SALT_LEN)
-		return 0;
-	len = strspn(ciphertext, BASE64_ALPHABET "=");
-	if (len != strlen(ciphertext))
-		return 0;
-	if (len & 3 || len > CIPHERTEXT_LENGTH)
-		return 0;
-
-	return 1;
+	mask_int_cand_target = opencl_speed_index(gpu_id) / 300;
 }
 
 static void * get_salt(char * ciphertext)
@@ -464,7 +397,7 @@ static void set_key(char *_key, int index)
 	const ARCH_WORD_32 *key = (ARCH_WORD_32*)_key;
 	int len = strlen(_key);
 
-	if (mask_int_cand.num_int_cand > 1 && !is_static_gpu_mask) {
+	if (mask_int_cand.num_int_cand > 1 && !mask_gpu_is_static) {
 		int i;
 		saved_int_key_loc[index] = 0;
 		for (i = 0; i < MASK_FMT_INT_PLHDR; i++) {
@@ -522,7 +455,7 @@ static char *get_key(int index)
 
 	if (mask_skip_ranges && mask_int_cand.num_int_cand > 1) {
 		for (i = 0; i < MASK_FMT_INT_PLHDR && mask_skip_ranges[i] != -1; i++)
-			if (is_static_gpu_mask)
+			if (mask_gpu_is_static)
 				out[static_gpu_locations[i]] =
 				mask_int_cand.int_cand[int_index].x[i];
 			else
@@ -812,7 +745,7 @@ static int crypt_all(int *pcount, struct db_salt *salt)
 
 	BENCH_CLERROR(clEnqueueWriteBuffer(queue[gpu_id], buffer_idx, CL_TRUE, 0, 4 * global_work_size, saved_idx, 0, NULL, NULL), "failed in clEnqueueWriteBuffer buffer_idx.");
 
-	if (!is_static_gpu_mask)
+	if (!mask_gpu_is_static)
 		BENCH_CLERROR(clEnqueueWriteBuffer(queue[gpu_id], buffer_int_key_loc, CL_TRUE, 0, 4 * global_work_size, saved_int_key_loc, 0, NULL, NULL), "failed in clEnqueueWriteBuffer buffer_int_key_loc.");
 	keys_changed = 0;
 	}
@@ -1063,14 +996,15 @@ static void reset(struct db_main *db)
 	else {
 		unsigned int *binary, i = 0;
 		char *ciphertext;
+		int tune_time = (options.flags & FLG_MASK_CHK) ? 300 : 50;
 
-		while (tests[num_loaded_hashes].ciphertext != NULL)
+		while (salted_sha1_common_tests[num_loaded_hashes].ciphertext != NULL)
 			num_loaded_hashes++;
 
 		loaded_hashes = (cl_uint*)mem_alloc(6 * sizeof(cl_uint) * num_loaded_hashes);
 
-		while (tests[i].ciphertext != NULL) {
-			ciphertext = fmt_default_split(tests[i].ciphertext, 0, &FMT_STRUCT);
+		while (salted_sha1_common_tests[i].ciphertext != NULL) {
+			ciphertext = fmt_default_split(salted_sha1_common_tests[i].ciphertext, 0, &FMT_STRUCT);
 			binary = (unsigned int*)get_binary(ciphertext);
 			loaded_hashes[6 * i] = binary[0];
 			loaded_hashes[6 * i + 1] = binary[1];
@@ -1105,7 +1039,7 @@ static void reset(struct db_main *db)
 		HANDLE_CLERROR(clEnqueueWriteBuffer(queue[gpu_id], buffer_offset_table, CL_TRUE, 0, sizeof(OFFSET_TABLE_WORD) * offset_table_size, offset_table, 0, NULL, NULL), "failed in clEnqueueWriteBuffer buffer_offset_table.");
 		HANDLE_CLERROR(clEnqueueWriteBuffer(queue[gpu_id], buffer_hash_table, CL_TRUE, 0, sizeof(cl_uint) * hash_table_size * 2, hash_table_192, 0, NULL, NULL), "failed in clEnqueueWriteBuffer buffer_hash_table.");
 
-		auto_tune(NULL, 50);
+		auto_tune(NULL, tune_time);
 		hash_ids[0] = 0;
 
 		initialized++;
@@ -1129,13 +1063,13 @@ struct fmt_main FMT_STRUCT = {
 		MAX_KEYS_PER_CRYPT,
 		FMT_CASE | FMT_8_BIT | FMT_REMOVE,
 		{ NULL },
-		tests
+		salted_sha1_common_tests
 	}, {
 		init,
 		done,
 		reset,
 		fmt_default_prepare,
-		valid,
+		salted_sha1_common_valid,
 		fmt_default_split,
 		get_binary,
 		get_salt,

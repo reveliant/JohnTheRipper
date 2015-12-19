@@ -173,7 +173,7 @@ static void set_key(char *key, int index)
 		}
 		if (!(temp & 0xff000000))
 		{
-			*keybuf_word = JOHNSWAP(temp | (0x80 << 24));
+			*keybuf_word = JOHNSWAP(temp | (0x80U << 24));
 			len+=3;
 			goto key_cleaning;
 		}
@@ -249,6 +249,10 @@ static char *source(char *source, void *binary)
 #ifdef REVERSE_STEPS
 	sha1_unreverse(hash);
 #endif
+	alter_endianity(hash, DIGEST_SIZE);
+#endif
+
+#if ARCH_LITTLE_ENDIAN==0
 	alter_endianity(hash, DIGEST_SIZE);
 #endif
 

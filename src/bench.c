@@ -51,6 +51,7 @@
 #include "unicode.h"
 #include "config.h"
 #include "common-gpu.h"
+#include "mask.h"
 
 #ifndef BENCH_BUILD
 #include "options.h"
@@ -116,6 +117,12 @@ static void bench_set_keys(struct fmt_main *format,
 {
 	char *plaintext;
 	int index, length;
+#ifndef BENCH_BUILD
+	int len = format->params.plaintext_length;
+
+	if ((len -= mask_add_len) < 0 || !(options.flags & FLG_MASK_STACKED))
+		len = 0;
+#endif
 
 	format->methods.clear_keys();
 
@@ -136,9 +143,17 @@ static void bench_set_keys(struct fmt_main *format,
 				break;
 		} while (1);
 
-		format->methods.set_key(plaintext, index);
+#ifndef BENCH_BUILD
+		if (options.flags & FLG_MASK_CHK) {
+			plaintext[len] = 0;
+			if (do_mask_crack(len ? plaintext : NULL))
+				return;
+		} else
+#endif
+			format->methods.set_key(plaintext, index);
 	}
 }
+
 #ifndef BENCH_BUILD
 static unsigned int get_cost(struct fmt_main *format, int index, int cost_idx)
 {
@@ -160,7 +175,7 @@ static unsigned int get_cost(struct fmt_main *format, int index, int cost_idx)
 #endif
 
 char *benchmark_format(struct fmt_main *format, int salts,
-	struct bench_results *results)
+	struct bench_results *results, struct db_main *test_db)
 {
 	static void *binary = NULL;
 	static int binary_size = 0;
@@ -237,7 +252,7 @@ char *benchmark_format(struct fmt_main *format, int salts,
 #endif
 	if (!(current = format->params.tests) || !current->ciphertext)
 		return "FAILED (no data)";
-	if ((where = fmt_self_test(format, NULL))) {
+	if ((where = fmt_self_test(format, test_db))) {
 		sprintf(s_error, "FAILED (%s)\n", where);
 		return s_error;
 	}
@@ -398,7 +413,7 @@ char *benchmark_format(struct fmt_main *format, int salts,
 
 		if (salts > 1) format->methods.set_salt(two_salts[index & 1]);
 		format->methods.cmp_all(binary,
-		    format->methods.crypt_all(&count, NULL));
+		    format->methods.crypt_all(&count, test_db->salts));
 
 		add32to64(&crypts, count);
 #if !OS_TIMER
@@ -514,7 +529,7 @@ int benchmark_all(void)
 #endif
 	unsigned int total, failed;
 	MEMDBG_HANDLE memHand;
-
+	struct db_main *test_db;
 #ifdef _OPENMP
 	int ompt;
 	int ompt_start = omp_get_max_threads();
@@ -555,8 +570,8 @@ AGAIN:
 			continue;
 
 /* Just test the encoding-aware formats if --encoding was used explicitly */
-		if (!pers_opts.default_enc && pers_opts.target_enc != ASCII &&
-		    pers_opts.target_enc != ISO_8859_1 &&
+		if (!options.default_enc && options.target_enc != ASCII &&
+		    options.target_enc != ISO_8859_1 &&
 		    !(format->params.flags & FMT_UTF8)) {
 			if (options.format == NULL ||
 			    strcasecmp(format->params.label, options.format))
@@ -569,7 +584,6 @@ AGAIN:
 				}
 			}
 		}
-#endif
 
 		/* FIXME: Kludge for thin dynamics, and OpenCL formats */
 		/* c3_fmt also added, since it is a somewhat dynamic   */
@@ -578,6 +592,15 @@ AGAIN:
 		    strstr(format->params.label, "-opencl") ||
 			strcmp(format->params.label, "crypt")==0 )
 			fmt_init(format);
+
+		/* GPU-side mask mode benchmark */
+		if (options.flags & FLG_MASK_CHK) {
+			static struct db_main fakedb;
+
+			fakedb.format = format;
+			mask_init(&fakedb, options.mask);
+		}
+#endif
 
 #ifdef _OPENMP
 		// MPIOMPmutex may have capped the number of threads
@@ -595,7 +618,7 @@ AGAIN:
 		    format->params.benchmark_comment,
 		    format->params.algorithm_name,
 #ifndef BENCH_BUILD
-			(pers_opts.target_enc == UTF_8 &&
+			(options.target_enc == UTF_8 &&
 			 format->params.flags & FMT_UNICODE) ?
 		        " in UTF-8 mode" : "");
 #else
@@ -632,6 +655,7 @@ AGAIN:
 		fflush(stdout);
 #endif /* _OPENMP */
 #endif /* HAVE_MPI */
+
 		switch (format->params.benchmark_length) {
 		case 0:
 		case -1000:
@@ -655,16 +679,22 @@ AGAIN:
 
 		total++;
 
+		/* (Ab)used to mute some messages from source() */
+		bench_running = 1;
+		test_db = ldr_init_test_db(format, NULL);
+		bench_running = 0;
+
 		if ((result = benchmark_format(format,
 		    format->params.salt_size ? BENCHMARK_MANY : 1,
-		    &results_m))) {
+		    &results_m, test_db))) {
 			puts(result);
 			failed++;
 			goto next;
 		}
 
 		if (msg_1)
-		if ((result = benchmark_format(format, 1, &results_1))) {
+		if ((result = benchmark_format(format, 1, &results_1,
+		    test_db))) {
 			puts(result);
 			failed++;
 			goto next;
@@ -768,7 +798,12 @@ AGAIN:
 
 next:
 		fflush(stdout);
+		ldr_free_test_db(test_db);
 		fmt_done(format);
+#ifndef BENCH_BUILD
+		if (options.flags & FLG_MASK_CHK)
+			mask_done();
+#endif
 		MEMDBG_checkSnapshot_possible_exit_on_error(memHand, 0);
 
 #ifndef BENCH_BUILD

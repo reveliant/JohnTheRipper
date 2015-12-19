@@ -50,6 +50,7 @@ AC_ARG_VAR([YASM], [full pathname of yasm (for optional AES-NI support)])
 AC_ARG_VAR([AS], [full pathname of assembler to use])
 AC_ARG_VAR([AR], [full pathname of "ar" to use])
 AC_ARG_VAR([LD], [full pathname of linker to use])
+AC_ARG_VAR([HT], [pre processor macro for telling us we have Hyperthreading])
 
 # Define Packages.
 # Use OpenSSL (default: yes).
@@ -691,6 +692,8 @@ AC_CHECK_FUNCS([posix_memalign aligned_alloc memalign __mingw_aligned_malloc _al
 
 AC_CACHE_SAVE
 
+CPU_BEST_FLAGS_MAIN=-DJOHN_$(echo ${CPU_STR} | tr . _)
+
 AC_SUBST([CC_CPU],["${CPU_BEST_FLAGS}"])
 AC_SUBST([CC_MAIN_CPU],["${CPU_BEST_FLAGS_MAIN}"])
 AC_SUBST([CC_ASM_OBJS],["${CC_ASM_OBJS}"])
@@ -827,9 +830,11 @@ fi
 # code to create M4_INCLUDES (all ./m4/*.m4 )
 AC_SUBST([M4_INCLUDES],[`echo m4/*.m4`])
 
-# Handle --prefix -> JOHN_SYSTEMWIDE_EXEC
+# Handle --prefix -> JOHN_SYSTEMWIDE
+# A prefix of /usr/local will mean execs in /usr/local/bin and the rest
+# in /usr/local/share/john
 AS_IF([test $prefix != "../run" && test $prefix != "NONE" ],
-   [CFLAGS="$CFLAGS -DJOHN_SYSTEMWIDE -DJOHN_SYSTEMWIDE_EXEC='\"$prefix\"'"],
+   [CFLAGS="$CFLAGS -DJOHN_SYSTEMWIDE -DJOHN_SYSTEMWIDE_EXEC='\"$prefix/bin\"' -DJOHN_SYSTEMWIDE_HOME='\"$prefix/share/john\"'"],
    [AS_IF([test $with_systemwide != no], [CFLAGS="$CFLAGS -DJOHN_SYSTEMWIDE"
    prefix=/usr/libexec/john])]
 )
@@ -851,7 +856,7 @@ fi
 echo "configure: creating *_plug.c and OpenCL object rules"
 if test "`echo *_plug.c`" != "*_plug.c"; then
    AC_SUBST([PLUGFORMATS_OBJS],[`echo *_plug.c | sed 's/\.c/.o/g'`])
-   AC_SUBST([KERNEL_OBJS],[`echo opencl/*.cl | sed 's/\bopencl\//..\/run\/kernels\//g'`])
+   AC_SUBST([KERNEL_OBJS],[`echo opencl/*.cl | sed 's/opencl\//..\/run\/kernels\//g'`])
    if test "x$plug_deps" = xyes -a "x$PERL" != x ; then
       echo "configure: creating Makefile dependencies"
       AC_SUBST([PLUGFORMATS_DEPS],[`$PERL ./plugin_deps.pl *_plug.c`])
@@ -882,9 +887,8 @@ if test "`echo *_fmt_plug.c`" != "*_fmt_plug.c"; then
 fi
 # if the file was not created, then bail.
 if test -f fmt_externs.h -a ! -s fmt_externs.h; then
-  echo "The build of fmt_externs.h failed. Can not continue!"
   cp Makefile.stub Makefile
-  exit 1
+  AC_MSG_ERROR([The build of fmt_externs.h failed. Can not continue!])
 fi
 # if file does not exist, then create a blank one (i.e. no *_plug.c files)
 if test ! -f fmt_externs.h; then
@@ -897,9 +901,8 @@ if test "`echo *_fmt_plug.c`" != "*_fmt_plug.c"; then
 fi
 # if the file was not created, then bail.
 if test -f fmt_registers.h -a ! -s fmt_registers.h; then
-  echo "The build of fmt_registers.h failed. Can not continue!"
   cp Makefile.stub Makefile
-  exit 1
+  AC_MSG_ERROR([The build of fmt_registers.h failed. Can not continue!])
 fi
 # if file does not exist, then create a blank one (i.e. no *_plug.c files)
 if test ! -f fmt_registers.h; then

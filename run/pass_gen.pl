@@ -78,8 +78,8 @@ my @funcs = (qw(DESCrypt BigCrypt BSDIcrypt md5crypt md5crypt_a BCRYPT BCRYPTx
 		clipperz-srp dahua fortigate lp lastpass rawmd2 mongodb mysqlna
 		o5logon postgres pst raw-blake2 raw-keccak raw-keccak256 siemens-s7
 		raw-skein-256 raw-skein-512 ssha512 tcp-md5 strip bitcoin blockchain
-		rawsha3-512 rawsha3-224 rawsha3-256 rawsha3-384
-	      ));
+		rawsha3-512 rawsha3-224 rawsha3-256 rawsha3-384 AzureAD vdi_256 vdi_128
+		));
 
 # todo: sapb sapfg ike keepass cloudkeychain pfx racf vnc pdf pkzip rar5 ssh raw_gost_cp cq dmg dominosec efs eigrp encfs fde gpg haval-128 Haval-256 keyring keystore krb4 krb5 krb5pa-sha1 kwallet luks pfx racf mdc2 sevenz afs ssh oldoffice openbsd-softraid openssl-enc openvms panama putty snefru-128 snefru-256 ssh-ng sxc sybase-prop tripcode vtp whirlpool0 whirlpool1
 my $i; my $h; my $u; my $salt;  my $out_username; my $out_extras; my $out_uc_pass; my $l0pht_fmt;
@@ -260,10 +260,12 @@ if (@ARGV == 1) {
 	my $orig_arg = $ARGV[0];
 	my $arg = lc $ARGV[0];
 	if (substr($arg,0,8) eq "dynamic_") { substr($arg,0,8)="dynamic="; }
-	if ($arg eq "dynamic") { $arg = "dynamic="; }
+	if ($arg eq "dynamic") { dynamic_compile("") }
 	if (substr($arg,0,8) eq "dynamic=") {
 		@funcs = ();
-		push(@funcs, $arg = dynamic_compile(substr($orig_arg,8)));
+		my $dyn="";
+		if (length($orig_arg)>8) { $dyn=substr($orig_arg,8); }
+		push(@funcs, $arg = dynamic_compile($dyn));
 	}
 	my $have_something = 0;
 	foreach (@funcs) {
@@ -311,9 +313,12 @@ if (@ARGV == 1) {
 		$u = 0;
 		my $orig_arg = $_;
 		my $arg = lc $_;
+		if ($arg eq "dynamic") { dynamic_compile(""); }
 		if (substr($arg,0,8) eq "dynamic_") { substr($arg,0,8)="dynamic="; }
 		if (substr($arg,0,8) eq "dynamic=") {
-			push(@funcs, $arg = dynamic_compile(substr($orig_arg,8)));
+			my $dyn="";
+			if (length($orig_arg)>8) { $dyn=substr($orig_arg,8); }
+			push(@funcs, $arg = dynamic_compile($dyn));
 		}
 		my $have_something = 0;
 		foreach (@funcs) {
@@ -721,6 +726,10 @@ sub get_username {
 	}
 	return randusername($len);
 }
+sub get_loops {
+	if ($arg_loops != -1) { return $arg_loops; }
+	return $_[0];
+}
 ############################################################################################
 # we need a getter function for $iv also (and content??, and possibly others) that are
 # modeled after get_salt()
@@ -994,7 +1003,7 @@ sub bsdicrypt {
 	return "_".Crypt::UnixCrypt_XS::int24_to_base64($rounds).$salt.Crypt::UnixCrypt_XS::block_to_base64($h);
 }
 sub md5crypt {
-	$salt = get_salt(8);
+	$salt = get_salt(-8);
 	return md5crypt_hash($_[1], $salt, "\$1\$");
 }
 sub bfx_fix_pass {
@@ -1197,9 +1206,9 @@ sub lp {
 	return "\$lp\$$salt\$$h";
 }
 sub lastpass {
-	my $iter = 500;
+	my $iter = get_loops(500);
 	$salt = get_salt(32, -32, \@userNames);
-	my $pbk = pp_pbkdf2($_[0], $salt, 500, "sha256", 32, 64);
+	my $pbk = pp_pbkdf2($_[0], $salt, $iter, "sha256", 32, 64);
 	require Crypt::OpenSSL::AES;
 	require Crypt::CBC;
 	my $dat = $salt;
@@ -1213,31 +1222,33 @@ sub odf {
 	my $iv; my $content;
 	$salt = get_salt(16);
 	$iv =  get_iv(8);
+	my $itr = get_loops(1024);
 	$content = get_content(-1024, -4095);
 	my $s = sha1($_[0]);
-	my $key = pp_pbkdf2($s, $salt, 1024, "sha1", 16,64);
+	my $key = pp_pbkdf2($s, $salt, $itr, "sha1", 16,64);
 	require Crypt::OpenSSL::Blowfish::CFB64;
 	my $crypt = Crypt::OpenSSL::Blowfish::CFB64->new($key, $iv);
 	my $output = $crypt->decrypt($content);
 	$s = sha1($output);
-	return "\$odf\$*0*0*1024*16*".unpack("H*",$s)."*8*".unpack("H*",$iv)."*16*".unpack("H*",$salt)."*0*".unpack("H*",$content);
+	return "\$odf\$*0*0*$itr*16*".unpack("H*",$s)."*8*".unpack("H*",$iv)."*16*".unpack("H*",$salt)."*0*".unpack("H*",$content);
 }
 sub odf_1 {
 	# odf cipher type 1 (AES instead of blowfish, and some sha256, pbkdf2 is still sha1, but 32 byte of output)
 	my $iv; my $content;
 	$salt = get_salt(16);
 	$iv =  get_iv(16);
+	my $itr = get_loops(1024);
 	$content = get_content(-1024, -4095);
 	while (length($content)%16 != 0) { $content .= "\x0" } # must be even 16 byte padded.
 	my $s = sha256($_[0]);
-	my $key = pp_pbkdf2($s, $salt, 1024, "sha1", 32,64);
+	my $key = pp_pbkdf2($s, $salt, $itr, "sha1", 32,64);
 	require Crypt::OpenSSL::AES;
 	require Crypt::CBC;
 	# set -padding to 'none'. Otherwise a Crypt::CBC->decrypt() padding removal will bite us, and possibly strip off bytes.
 	my $crypt = Crypt::CBC->new(-literal_key => 1, -key => $key, -iv => $iv, -cipher => "Crypt::OpenSSL::AES", -header => 'none', -padding => 'none');
 	my $output = $crypt->decrypt($content);
 	$s = sha256($output);
-	return "\$odf\$*1*1*1024*32*".unpack("H*",$s)."*16*".unpack("H*",$iv)."*16*".unpack("H*",$salt)."*0*".unpack("H*",$content);
+	return "\$odf\$*1*1*$itr*32*".unpack("H*",$s)."*16*".unpack("H*",$iv)."*16*".unpack("H*",$salt)."*0*".unpack("H*",$content);
 }
 # the inverse of the DecryptUsingSymmetricKeyAlgorithm() in the JtR office format
 sub _office_2k10_EncryptUsingSymmetricKeyAlgorithm {
@@ -1268,7 +1279,7 @@ sub _office_2k10_GenerateAgileEncryptionKey {
 sub office_2010 {
 	$salt = get_salt(16);
 	my $randdata = get_iv(16);
-	my $spincount = 100000;
+	my $spincount = get_loops(100000);
 	my $hash1; my $hash2;
 	_office_2k10_GenerateAgileEncryptionKey($_[1], $spincount, \&sha1, $hash1, $hash2);
 	my $encryptedVerifier = _office_2k10_EncryptUsingSymmetricKeyAlgorithm($hash1, $randdata, 16, 128/8);
@@ -1278,7 +1289,7 @@ sub office_2010 {
 sub office_2013 {
 	$salt = get_salt(16);
 	my $randdata = get_iv(16);
-	my $spincount = 100000;
+	my $spincount = get_loops(100000);
 	my $hash1; my $hash2;
 	_office_2k10_GenerateAgileEncryptionKey($_[1], $spincount, \&sha512, $hash1, $hash2);
 	my $encryptedVerifier = _office_2k10_EncryptUsingSymmetricKeyAlgorithm($hash1, $randdata, 16, 256/8);
@@ -1446,13 +1457,19 @@ sub _tc_build_buffer {
 }
 # I looked high and low for a Perl implementation of AES-256-XTS and
 # could not find one.  This may be the first implementation in Perl, ever.
-sub _tc_aes_256_xts {
+sub _aes_xts {
 	# a dodgy, but working XTS implementation. (encryption). To do decryption
 	# simply do $cipher1->decrypt($tmp) instead of encrypt. That is the only diff.
-	my $key1 = substr($_[0],0,32); my $key2 = substr($_[0],32,32);
+	# switched to do both 256 and 128 bit AES ($_[3]) and can also handle decryption
+	# and not just encryption ($_[4] set to 1 will decrypt)
+	my $bytes = 32; # AES 256
+	if ($_[3] == 128) { $bytes = 16; }
+	my $key1 = substr($_[0],0,$bytes); my $key2 = substr($_[0],$bytes,$bytes);
 	my $d; my $c = $_[1]; # $c=cleartext MUST be a multiple of 16.
 	my $num = length($c) / 16;
 	my $t = $_[2];	# tweak (must be provided)
+	my $decr = $_[4];
+	if (!defined($decr)) { $decr = 0; }
 	require Crypt::OpenSSL::AES;
 	my $cipher1 = new Crypt::OpenSSL::AES($key1);
 	my $cipher2 = new Crypt::OpenSSL::AES($key2);
@@ -1460,7 +1477,48 @@ sub _tc_aes_256_xts {
 	for (my $cnt = 0; ; ) {
 		my $tmp = substr($c, 16*$cnt, 16);
 		$tmp ^= $t;
-		$tmp = $cipher1->encrypt($tmp);
+		if ($decr != 0) {
+			$tmp = $cipher1->decrypt($tmp);
+		} else {
+			$tmp = $cipher1->encrypt($tmp);
+		}
+		$tmp ^= $t;
+		$d .= $tmp;
+		$cnt += 1;
+		if ($cnt == $num) { return ($d); }
+		# do the mulmod in GF(2)
+		my $Cin=0; my $Cout; my $x;
+		for ($x = 0; $x < 16; $x += 1) {
+			$Cout = ((ord(substr($t,$x,1)) >> 7) & 1);
+			substr($t,$x,1) =  chr(((ord(substr($t,$x,1)) << 1) + $Cin) & 0xFF);
+			$Cin = $Cout;
+		}
+		if ($Cout != 0) {
+			substr($t,0,1) = chr(ord(substr($t,0,1))^135);
+		}
+	}
+}
+sub _tc_aes_128_xts {
+	# a dodgy, but working XTS implementation. (encryption). To do decryption
+	# simply do $cipher1->decrypt($tmp) instead of encrypt. That is the only diff.
+	my $key1 = substr($_[0],0,16); my $key2 = substr($_[0],16,16);
+	my $d; my $c = $_[1]; # $c=cleartext MUST be a multiple of 16.
+	my $num = length($c) / 16;
+	my $t = $_[2];	# tweak (must be provided)
+	my $decr = $_[3];
+	if (!defined($decr)) { $decr = 0; }
+	require Crypt::OpenSSL::AES;
+	my $cipher1 = new Crypt::OpenSSL::AES($key1);
+	my $cipher2 = new Crypt::OpenSSL::AES($key2);
+	$t = $cipher2->encrypt($t);
+	for (my $cnt = 0; ; ) {
+		my $tmp = substr($c, 16*$cnt, 16);
+		$tmp ^= $t;
+		if ($decr != 0) {
+			$tmp = $cipher1->decrypt($tmp);
+		} else {
+			$tmp = $cipher1->encrypt($tmp);
+		}
 		$tmp ^= $t;
 		$d .= $tmp;
 		$cnt += 1;
@@ -1482,7 +1540,7 @@ sub tc_ripemd160 {
 	my $h = pp_pbkdf2($_[0], $salt, 2000, \&ripemd160, 64, 64);
 	my $d = _tc_build_buffer();
 	my $tweak = "\x00"x16;	#first block of file
-	$h = _tc_aes_256_xts($h,$d,$tweak);
+	$h = _aes_xts($h,$d,$tweak,256);
 	return "truecrypt_RIPEMD_160\$".unpack("H*",$salt).unpack("H*",$h);
 }
 sub tc_sha512 {
@@ -1490,7 +1548,7 @@ sub tc_sha512 {
 	my $h = pp_pbkdf2($_[0], $salt, 1000, \&sha512, 64, 128);
 	my $d = _tc_build_buffer();
 	my $tweak = "\x00"x16;	#first block of file
-	$h = _tc_aes_256_xts($h,$d,$tweak);
+	$h = _aes_xts($h,$d,$tweak,256);
 	return "truecrypt_SHA_512\$".unpack("H*",$salt).unpack("H*",$h);
 }
 sub tc_whirlpool {
@@ -1498,7 +1556,7 @@ sub tc_whirlpool {
 	my $h = pp_pbkdf2($_[0], $salt, 1000, \&whirlpool, 64, 64);	# note, 64 byte ipad/opad (oSSL is buggy?!?!)
 	my $d = _tc_build_buffer();
 	my $tweak = "\x00"x16;	#first block of file
-	$h = _tc_aes_256_xts($h,$d,$tweak);
+	$h = _aes_xts($h,$d,$tweak,256);
 	return "truecrypt_WHIRLPOOL\$".unpack("H*",$salt).unpack("H*",$h);
 }
 sub dahua {
@@ -1538,9 +1596,8 @@ sub rsvp {
 sub sap_h {
 	$salt = get_salt(12, -16);
 	my $mode = "sha1";
-	my $iter = 1024;
+	my $iter = get_loops(1024);
 	if (defined $argmode) {$mode=$argmode;} # must be sha1 sha256 sha384 or sha512
-	if (defined $argcontent) {$iter=$argcontent; if ($iter<1||$iter>(1<<32)){$iter=1024}} # must be number from 1 to 2^32
 	my $modestr;
 	if ($mode eq "sha1") { $modestr = "sha"; }
 	elsif ($mode eq "sha256") { $modestr = "SHA256"; }
@@ -1725,7 +1782,7 @@ sub cloudkeychain {
 }
 sub agilekeychain {
 	my $nkeys=1;
-	my $iterations=1000;
+	my $iterations=get_loops(1000);
 	my $salt=get_salt(8);
 	my $iv=get_iv(16);
 	my $dat=randstr(1040-32); # not sure what would be here, but JtR does not do anything with it.
@@ -1745,8 +1802,7 @@ sub bitcoin {
 	my $master; my $rounds; # my $ckey; my $public_key;
 	$master = pack("H*", "0e34a996b1ce8a1735bba1acf6d696a43bc6730b5c41224206c93006f14f951410101010101010101010101010101010");
 	$salt = get_salt(8);
-	#$rounds = 177864;
-	$rounds = 20000;		# very SMALL number of rounds as default.
+	$rounds = get_loops(20000);  # 20k is a 'small' default number, but runs pretty fast.
 	$h = sha512($_[1] . $salt);
 	for (my $i = 1; $i < $rounds; $i++) {
 		$h = sha512($h);
@@ -1759,6 +1815,36 @@ sub bitcoin {
 sub sevenz {
 }
 sub afs {
+}
+sub azuread {
+	$salt = get_salt(10);
+	#$salt = pack("H*", "317ee9d1dec6508fa510");
+	my $rounds = get_loops(100); # NOTE, right now, Azure-AD 'is' hard coded at 100, ITRW
+	$h = encode("UTF-16LE", uc unpack("H*",md4(encode("UTF-16LE", $_[0]))));
+	my $key = unpack("H*",pp_pbkdf2($h, $salt, $rounds, "sha256", 32, 64));
+	return "v1;PPH1_MD4,".unpack("H*",$salt).",$rounds,$key;";
+}
+sub vdi_256 {
+	my $salt1   = randstr(32, \@chrRawData);
+	my $salt2   = randstr(32, \@chrRawData);
+	my $dec_dat = randstr(64, , \@chrRawData);
+	my $evp_pass = pp_pbkdf2($_[0], $salt1, 2000, \&sha256, 64, 64);
+	my $tweak = "\x00"x16;
+	my $enc_pass = _aes_xts($evp_pass,$dec_dat,$tweak, 256);
+	my $final  = unpack("H*",pp_pbkdf2($dec_dat, $salt2, 2000, \&sha256, 32, 64));
+	$salt1   = unpack("H*",$salt1); $salt2   = unpack("H*",$salt2); $enc_pass = unpack("H*",$enc_pass);
+	return "\$vdi\$aes-xts256\$sha256\$2000\$2000\$64\$32\$$salt1\$$salt2\$$enc_pass\$$final";
+}
+sub vdi_128 {
+	my $salt1   = randstr(32, \@chrRawData);
+	my $salt2   = randstr(32, \@chrRawData);
+	my $dec_dat = randstr(32, , \@chrRawData);
+	my $evp_pass = pp_pbkdf2($_[0], $salt1, 2000, \&sha256, 32, 64);
+	my $tweak = "\x00"x16;
+	my $enc_pass = _aes_xts($evp_pass,$dec_dat,$tweak, 128);
+	my $final  = unpack("H*",pp_pbkdf2($dec_dat, $salt2, 2000, \&sha256, 32, 64));
+	$salt1   = unpack("H*",$salt1); $salt2   = unpack("H*",$salt2); $enc_pass = unpack("H*",$enc_pass);
+	return "\$vdi\$aes-xts128\$sha256\$2000\$2000\$32\$32\$$salt1\$$salt2\$$enc_pass\$$final";
 }
 sub blockchain {
 	my $unenc = "{\n{\t\"guid\" : \"246093c1-de47-4227-89be-".randstr(12,\@chrHexLo)."\",\n\t\"sharedKey\" : \"fccdf579-707c-46bc-9ed1-".randstr(12,\@chrHexLo)."\",\n\t";
@@ -2337,7 +2423,7 @@ sub _sha_crypts {
 	my $a; my $b, my $c, my $tmp; my $i; my $ds; my $dp; my $p; my $s;
 	my ($func, $bits, $key, $salt) = @_;
 	my $bytes = $bits/8;
-	my $loops = $arg_loops != -1 ? $arg_loops : 5000;
+	my $loops = get_loops(5000);
 
 	$b = $func->($key.$salt.$key);
 
@@ -2430,7 +2516,7 @@ sub sha512crypt {
 }
 sub sha1crypt {
 	$salt = get_salt(8);
-	my $loops = $arg_loops != -1 ? $arg_loops : 5000;
+	my $loops = get_loops(5000);
 	# actual call to pbkdf1 (that is the last 1 param, it says to use pbkdf1 logic)
 	$h = pp_pbkdf2($_[1], $salt.'$sha1$'.$loops, $loops, "sha1", 20, 64, 1);
 	$h = base64_aix($h.substr($h,0,1)); # the hash is padded to 21 bytes, by appending first byte.  That is how it is done, dont ask why.
@@ -2783,15 +2869,17 @@ sub raw_gost_cp {
 sub pwsafe {
 	$salt=get_salt(32);
 	my $digest = sha256($_[1],$salt);
+	my $loops = get_loops(2048);
 	my $i;
-	for ($i = 0; $i <= 2048; ++$i) {
+	for ($i = 0; $i <= $loops; ++$i) {
 		$digest = sha256($digest);
 	}
-	return "\$pwsafe\$\*3\*".unpack('H*', $salt)."\*2048\*".unpack('H*', $digest);
+	return "\$pwsafe\$\*3\*".unpack('H*', $salt)."\*$loops\*".unpack('H*', $digest);
 }
 sub django {
 	$salt=get_salt(12,-32);
-	return "\$django\$\*1\*pbkdf2_sha256\$10000\$$salt\$".base64(pp_pbkdf2($_[1], $salt, 10000, "sha256", 32, 64));
+	my $loops = get_loops(10000);
+	return "\$django\$\*1\*pbkdf2_sha256\$$loops\$$salt\$".base64(pp_pbkdf2($_[1], $salt, $loops, "sha256", 32, 64));
 }
 sub django_scrypt {
 	require Crypt::ScryptKDF;
@@ -2828,14 +2916,12 @@ sub aix_ssha512 {
 # they all get converted to this one, so that is all I plan on using.
 sub pbkdf2_hmac_sha512 {
 	$salt=get_salt(16,-32);
-	my $itr = 10000;
-	if ($arg_loops > 0) { $itr = $arg_loops; }
+	my $itr = get_loops(10000);
 	return "\$pbkdf2-hmac-sha512\$${itr}.".unpack("H*", $salt).".".pp_pbkdf2_hex($_[1],$salt,$itr,"sha512",64, 128);
 }
 sub pbkdf2_hmac_sha256 {
 	$salt=get_salt(16);
-	my $itr = 12000;
-	if ($arg_loops > 0) { $itr = $arg_loops; }
+	my $itr = get_loops(12000);
 	my $s64 = base64pl($salt);
 	my $h64 = substr(base64pl(pack("H*",pp_pbkdf2_hex($_[1],$salt,$itr,"sha256",32, 64))),0,43);
 	$s64 = substr($s64, 0, 22);
@@ -2843,21 +2929,18 @@ sub pbkdf2_hmac_sha256 {
 }
 sub pbkdf2_hmac_sha1 {
 	$salt=get_salt(16);
-	my $itr = 1000;
-	if ($arg_loops > 0) { $itr = $arg_loops; }
+	my $itr = get_loops(1000);
 	return "\$pbkdf2-hmac-sha1\$${itr}.".unpack("H*", $salt).".".pp_pbkdf2_hex($_[1],$salt,$itr,"sha1",20, 64);
 }
 sub pbkdf2_hmac_sha1_pkcs5s2 {
 	$salt=get_salt(16);
-	my $itr = 10000;
-	if ($arg_loops > 0) { $itr = $arg_loops; }
+	my $itr = get_loops(10000);
 	my $h = base64pl($salt.pp_pbkdf2($_[1],$salt,$itr,"sha1",20, 64));
 	return "{PKCS5S2}$h";
 }
 sub pbkdf2_hmac_sha1_p5k2 {
 	$salt=get_salt(16);
-	my $itr = 1000;
-	if ($arg_loops > 0) { $itr = $arg_loops; }
+	my $itr = get_loops(1000);
 	my $itrs = sprintf("%x", $itr);
 	return "\$p5k2\$$itrs\$".base64($salt).'$'.base64(pack("H*",pp_pbkdf2_hex($_[1],$salt,$itr,"sha1",20, 64)));
 }
@@ -3587,6 +3670,7 @@ sub dynamic_compile_to_pcode {
 	unless (defined($saltlen) && $saltlen =~ /^[+\-]?\d*.?\d+$/) { $saltlen = 8; }
 	$gen_stype = $hash{"salt"};
 	unless (defined($gen_stype)) { $gen_stype = "true"; }
+	#print "$gen_stype\n";
 
 	# load salt #2
 	$salt2len = $hash{"salt2len"};
@@ -3833,7 +3917,12 @@ sub dynamic_load_salt {
 			if ($slen < 0) {
 				$slen = int(rand($slen*-1));
 			}
-			$gen_s=randstr($slen);
+			#print "$gen_stype\n";
+			if ($gen_stype eq "onlyhex") {
+				$gen_s=randstr($slen, \@chrHexLo);
+			} else {
+				$gen_s=randstr($slen);
+			}
 		}
 		$gen_soutput = $gen_s;
 		if ($gen_stype eq "tohex") { $gen_s=md5_hex($gen_s); }

@@ -41,10 +41,8 @@ john_register_one(&fmt_opencl_xsha512);
 #define KERNEL_NAME "kernel_xsha512"
 #define CMP_KERNEL_NAME "kernel_cmp"
 
-#define ITERATIONS 1
-
 #define MIN_KEYS_PER_CRYPT	(1024*512)
-#define MAX_KEYS_PER_CRYPT	(ITERATIONS*MIN_KEYS_PER_CRYPT)
+#define MAX_KEYS_PER_CRYPT	(MIN_KEYS_PER_CRYPT)
 #define hash_addr(j,idx) (((j)*(global_work_size))+(idx))
 
 #define SWAP64(n) \
@@ -70,7 +68,6 @@ john_register_one(&fmt_opencl_xsha512);
 #define CIPHERTEXT_LENGTH 136
 
 typedef struct {		// notice memory align problem
-	uint64_t H[8];
 	uint32_t buffer[32];	//1024 bits
 	uint32_t buflen;
 } xsha512_ctx;
@@ -102,7 +99,7 @@ static struct fmt_tests tests[] = {
 static xsha512_key *gkey;
 static xsha512_hash *ghash;
 static xsha512_salt gsalt;
-uint8_t xsha512_key_changed;
+static uint8_t xsha512_key_changed;
 static uint8_t hash_copy_back;
 
 static uint64_t H[8] = {
@@ -219,7 +216,7 @@ static void reset(struct db_main *db)
 		// Initialize openCL tuning (library) for this format.
 		opencl_init_auto_setup(SEED, 0, NULL, warn, 1, self,
 		                       create_clobj, release_clobj,
-		                       sizeof(xsha512_key), 0);
+		                       sizeof(xsha512_key), 0, db);
 
 		// Auto tune execution from shared/included code.
 		autotune_run(self, 1, 0, 500);
@@ -238,11 +235,10 @@ static void done(void)
 	}
 }
 
-static void copy_hash_back()
+static inline void copy_hash_back()
 {
     if (!hash_copy_back) {
-        HANDLE_CLERROR(clEnqueueReadBuffer(queue[gpu_id], mem_out, CL_FALSE, 0,outsize, ghash, 0, NULL, NULL), "Copy data back");
-        HANDLE_CLERROR(clFinish(queue[gpu_id]), "clFinish error");
+        HANDLE_CLERROR(clEnqueueReadBuffer(queue[gpu_id], mem_out, CL_TRUE, 0,outsize, ghash, 0, NULL, NULL), "Copy data back");
         hash_copy_back = 1;
     }
 }
@@ -450,18 +446,15 @@ static int crypt_all(int *pcount, struct db_salt *salt)
 
 	///Copy data to GPU memory
 	if (xsha512_key_changed || ocl_autotune_running) {
-		HANDLE_CLERROR(clEnqueueWriteBuffer
+		BENCH_CLERROR(clEnqueueWriteBuffer
 		    (queue[gpu_id], mem_in, CL_FALSE, 0, insize, gkey, 0, NULL,
 			multi_profilingEvent[0]), "Copy memin");
 	}
 
 	///Run kernel
-	HANDLE_CLERROR(clEnqueueNDRangeKernel
+	BENCH_CLERROR(clEnqueueNDRangeKernel
 	    (queue[gpu_id], crypt_kernel, 1, NULL, &global_work_size, lws,
 		0, NULL, multi_profilingEvent[1]), "Set ND range");
-
-	///Await completion of all the above
-	HANDLE_CLERROR(clFinish(queue[gpu_id]), "clFinish error");
 
 	/// Reset key to unchanged and hashes uncopy to host
 	xsha512_key_changed = 0;
@@ -485,11 +478,9 @@ static int cmp_all(void *binary, int count)
 		0, NULL, NULL), "Set ND range");
 
 	/// Copy result out
-	HANDLE_CLERROR(clEnqueueReadBuffer(queue[gpu_id], mem_cmp, CL_FALSE, 0,
+	HANDLE_CLERROR(clEnqueueReadBuffer(queue[gpu_id], mem_cmp, CL_TRUE, 0,
 		sizeof(uint32_t), &result, 0, NULL, NULL), "Copy data back");
 
-	///Await completion of all the above
-	HANDLE_CLERROR(clFinish(queue[gpu_id]), "clFinish error");
 	return result;
 }
 

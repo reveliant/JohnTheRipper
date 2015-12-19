@@ -1,19 +1,15 @@
 /*
- * OpenCL macros
+ * OpenCL common macros
  *
  * Copyright (c) 2014-2015, magnum
  * This software is hereby released to the general public under
  * the following terms: Redistribution and use in source and binary
  * forms, with or without modification, are permitted.
  *
- * NOTICE: After changes in headers, you probably need to drop cached
- * kernels to ensure the changes take effect:
+ * NOTICE: After changes in headers, with nvidia driver you probably
+ * need to drop cached kernels to ensure the changes take effect:
  *
- * For nvidia:
  * rm -fr ~/.nv/ComputeCache
- *
- * AMD, Apple, some others
- * rm ../run/kernels/?*.bin
  *
  */
 
@@ -32,6 +28,21 @@ typedef int int32_t;
 typedef ulong uint64_t;
 typedef long int64_t;
 
+#if SIZEOF_SIZE_T == 8
+typedef uint64_t host_size_t;
+#else
+typedef uint32_t host_size_t;
+#endif
+
+/*
+ * "Copy" of the one in dyna_salt.h (we only need it to be right size,
+ * bitfields are not allowed in OpenCL)
+ */
+typedef struct dyna_salt_t {
+	host_size_t salt_cmp_size;
+	host_size_t bitfield_and_offset;
+} dyna_salt;
+
 #ifndef MIN
 #define MIN(a,b) ((a)<(b)?(a):(b))
 #endif
@@ -39,7 +50,25 @@ typedef long int64_t;
 #define MAX(a,b) ((a)>(b)?(a):(b))
 #endif
 
-#if 0 /* Used for testing */
+/*
+ * host code may pass -DV_WIDTH=2 or some other width.
+ *
+ * I wish they'd make typeof() an OpenCL requirement. The only devices I've
+ * seen not supporting it is recent Intel but they also never want vectorized
+ * code so this workaround works fine for current use.
+ */
+#if V_WIDTH > 1
+#define MAYBE_VECTOR_UINT	VECTOR(uint, V_WIDTH)
+#define MAYBE_VECTOR_ULONG	VECTOR(ulong, V_WIDTH)
+#define typeof __typeof__
+#else
+#define MAYBE_VECTOR_UINT	uint
+#define MAYBE_VECTOR_ULONG	ulong
+#define typeof(a) uint
+#define SCALAR 1
+#endif
+
+#if SCALAR && 0 /* Used for testing */
 #define HAVE_LUT3	1
 inline uint lut3(uint x, uint y, uint z, uchar m)
 {
@@ -57,7 +86,7 @@ inline uint lut3(uint x, uint y, uint z, uchar m)
 #define USE_BITSELECT 1
 #endif
 
-#if SM_MAJOR < 2
+#if SM_MAJOR == 1
 #define OLD_NVIDIA 1
 #endif
 
@@ -65,7 +94,7 @@ inline uint lut3(uint x, uint y, uint z, uchar m)
 #define HAVE_ANDNOT 1
 #endif
 
-#if SM_MAJOR >= 5 && (DEV_VER_MAJOR > 352 || (DEV_VER_MAJOR == 352 && DEV_VER_MINOR >= 21))
+#if SCALAR && SM_MAJOR >= 5 && (DEV_VER_MAJOR > 352 || (DEV_VER_MAJOR == 352 && DEV_VER_MINOR >= 21))
 #define HAVE_LUT3	1
 inline uint lut3(uint a, uint b, uint c, uint imm)
 {
@@ -98,7 +127,7 @@ inline ulong lut3_64(ulong a, ulong b, ulong c, uint imm)
 #pragma OPENCL EXTENSION cl_amd_media_ops : enable
 #define BITALIGN(hi, lo, s) amd_bitalign((hi), (lo), (s))
 #else
-#if SM_MAJOR > 3 || (SM_MAJOR == 3 && SM_MINOR >= 2)
+#if SCALAR && SM_MAJOR > 3 || (SM_MAJOR == 3 && SM_MINOR >= 2)
 inline uint funnel_shift_right(uint hi, uint lo, uint s)
 {
 	uint r;
@@ -129,16 +158,6 @@ inline uint funnel_shift_right_imm(uint hi, uint lo, uint s)
 
 #define CONCAT(TYPE,WIDTH)	TYPE ## WIDTH
 #define VECTOR(x, y)		CONCAT(x, y)
-
-/* host code may pass -DV_WIDTH=2 or some other width */
-#if defined(V_WIDTH) && V_WIDTH > 1
-#define MAYBE_VECTOR_UINT	VECTOR(uint, V_WIDTH)
-#define MAYBE_VECTOR_ULONG	VECTOR(ulong, V_WIDTH)
-#else
-#define MAYBE_VECTOR_UINT	uint
-#define MAYBE_VECTOR_ULONG	ulong
-#define SCALAR 1
-#endif
 
 /* Workaround for problem seen with 9600GT */
 #if OLD_NVIDIA
@@ -174,7 +193,7 @@ inline uint SWAP32(uint x)
             (((n) >> 40) & 0xff00)     | ((n)  >> 56))
 #endif
 
-#if defined(SCALAR)
+#if SCALAR
 #define VSWAP32 SWAP32
 #else
 /* Vector-capable swap32() */
@@ -222,7 +241,7 @@ inline MAYBE_VECTOR_UINT VSWAP32(MAYBE_VECTOR_UINT x)
 #define GETCHAR_MC(buf, index) (((MAYBE_CONSTANT uchar*)(buf))[(index)])
 #define LASTCHAR_BE(buf, index, val) (buf)[(index)>>2] = ((buf)[(index)>>2] & (0xffffff00U << ((((index) & 3) ^ 3) << 3))) + ((val) << ((((index) & 3) ^ 3) << 3))
 
-#if no_byte_addressable(DEVICE_INFO) || !defined(SCALAR) || (gpu_amd(DEVICE_INFO) && defined(AMD_PUTCHAR_NOCAST))
+#if no_byte_addressable(DEVICE_INFO) || !SCALAR || (gpu_amd(DEVICE_INFO) && defined(AMD_PUTCHAR_NOCAST))
 /* 32-bit stores */
 #define PUTCHAR(buf, index, val) (buf)[(index)>>2] = ((buf)[(index)>>2] & ~(0xffU << (((index) & 3) << 3))) + ((val) << (((index) & 3) << 3))
 #define PUTCHAR_G	PUTCHAR
@@ -249,7 +268,8 @@ inline MAYBE_VECTOR_UINT VSWAP32(MAYBE_VECTOR_UINT x)
 
 /* Use with some caution... */
 #define memcpy_macro(dst, src, count) do {	  \
-		for (uint _i = 0; _i < count; _i++) \
+		uint c = count; \
+		for (uint _i = 0; _i < c; _i++) \
 			(dst)[_i] = (src)[_i]; \
 	} while (0)
 
@@ -257,7 +277,7 @@ inline MAYBE_VECTOR_UINT VSWAP32(MAYBE_VECTOR_UINT x)
 #define dump_stuff_msg(msg, x, size) do {	  \
 		uint ii; \
 		printf("%s : ", msg); \
-		for (ii = 0; ii < size/4; ii++) \
+		for (ii = 0; ii < (size)/4; ii++) \
 			printf("%08x ", SWAP32(x[ii])); \
 		printf("\n"); \
 	} while (0)
@@ -266,7 +286,7 @@ inline MAYBE_VECTOR_UINT VSWAP32(MAYBE_VECTOR_UINT x)
 #define dump_stuff_be_msg(msg, x, size) do {	  \
 		uint ii; \
 		printf("%s : ", msg); \
-		for (ii = 0; ii < size/4; ii++) \
+		for (ii = 0; ii < (size)/4; ii++) \
 			printf("%08x ", x[ii]); \
 		printf("\n"); \
 	} while (0)

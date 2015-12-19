@@ -31,6 +31,8 @@ john_register_one(&FMT_STRUCT);
 #include "common-opencl.h"
 #include "config.h"
 #include "options.h"
+#include "base64_convert.h"
+#include "rawSHA1_common.h"
 #include "mask_ext.h"
 #include "bt_interface.h"
 
@@ -43,8 +45,6 @@ john_register_one(&FMT_STRUCT);
 
 #define PLAINTEXT_LENGTH		55 /* Max. is 55 with current kernel */
 #define BUFSIZE				((PLAINTEXT_LENGTH+3)/4*4)
-#define HASH_LENGTH			(2 * DIGEST_SIZE)
-#define CIPHERTEXT_LENGTH		(HASH_LENGTH + TAG_LENGTH)
 
 #define DIGEST_SIZE			20
 #define BINARY_SIZE			20
@@ -54,9 +54,6 @@ john_register_one(&FMT_STRUCT);
 
 #define MIN_KEYS_PER_CRYPT		1
 #define MAX_KEYS_PER_CRYPT		1
-
-#define FORMAT_TAG			"$dynamic_26$"
-#define TAG_LENGTH			(sizeof(FORMAT_TAG) - 1)
 
 static cl_mem pinned_saved_keys, pinned_saved_idx, pinned_int_key_loc;
 static cl_mem buffer_keys, buffer_idx, buffer_int_keys, buffer_int_key_loc;
@@ -76,27 +73,7 @@ static cl_uint *zero_buffer;
 #define MIN_KEYS_PER_CRYPT      1
 #define MAX_KEYS_PER_CRYPT      1
 
-#define get_power_of_two(v)	\
-{				\
-	v--;			\
-	v |= v >> 1;		\
-	v |= v >> 2;		\
-	v |= v >> 4;		\
-	v |= v >> 8;		\
-	v |= v >> 16;		\
-	v |= v >> 32;		\
-	v++;			\
-}
-
 #include "memdbg.h"
-
-static struct fmt_tests tests[] = {
-	{"a9993e364706816aba3e25717850c26c9cd0d89d", "abc"},
-	{FORMAT_TAG "095bec1163897ac86e393fa16d6ae2c2fce21602", "7850"},
-	{"dd3fbb0ba9e133c4fd84ed31ac2e5bc597d61774", "7858"},
-	{"207db421a91dc3eb1d976e1925fe97313a1ae0b3", "Skipping and& Dipping__1"},
-	{NULL}
-};
 
 struct fmt_main FMT_STRUCT;
 
@@ -300,7 +277,7 @@ static void init_kernel(unsigned int num_ld_hashes, char *bitmap_para)
 #endif
 	, offset_table_size, hash_table_size, shift64_ot_sz, shift64_ht_sz,
 	shift128_ot_sz, shift128_ht_sz, num_ld_hashes,
-	mask_int_cand.num_int_cand, bitmap_para, is_static_gpu_mask,
+	mask_int_cand.num_int_cand, bitmap_para, mask_gpu_is_static,
 	(unsigned long long)const_cache_size, static_gpu_locations[0]
 #if 1 < MASK_FMT_INT_PLHDR
 	, static_gpu_locations[1]
@@ -322,65 +299,20 @@ static void init(struct fmt_main *_self)
 {
 	self = _self;
 	num_loaded_hashes = 0;
-	mask_int_cand_target = 10000;
 
 	opencl_prepare_dev(gpu_id);
-}
-
-static int valid(char *ciphertext, struct fmt_main *self){
-	int i;
-
-	if (!strncmp(ciphertext, FORMAT_TAG, TAG_LENGTH))
-		ciphertext += TAG_LENGTH;
-
-	if (strlen(ciphertext) != HASH_LENGTH) return 0;
-	for (i = 0; i < HASH_LENGTH; i++){
-		if (!((('0' <= ciphertext[i]) && (ciphertext[i] <= '9')) ||
-			(('a' <= ciphertext[i]) && (ciphertext[i] <= 'f'))
-			|| (('A' <= ciphertext[i]) && (ciphertext[i] <= 'F'))))
-			return 0;
-	}
-	return 1;
-}
-
-static char *split(char *ciphertext, int index, struct fmt_main *self)
-{
-	static char out[CIPHERTEXT_LENGTH + 1];
-
-	if (!strncmp(ciphertext, FORMAT_TAG, TAG_LENGTH))
-		ciphertext += TAG_LENGTH;
-
-	strncpy(out, FORMAT_TAG, sizeof(out));
-
-	memcpy(&out[TAG_LENGTH], ciphertext, HASH_LENGTH);
-	out[CIPHERTEXT_LENGTH] = 0;
-
-	strlwr(&out[TAG_LENGTH]);
-
-	return out;
-}
-
-static char *prepare(char *split_fields[10], struct fmt_main *self)
-{
-	return fmt_default_prepare(split_fields, self);
+	mask_int_cand_target = opencl_speed_index(gpu_id) / 300;
 }
 
 static void *get_binary(char *ciphertext)
 {
-	static unsigned char *realcipher;
-	int i;
-
-	if (!realcipher)
-		realcipher = mem_alloc_tiny(DIGEST_SIZE, MEM_ALIGN_WORD);
+	static ARCH_WORD_32 full[DIGEST_SIZE / 4 + 1];
+	unsigned char *realcipher = (unsigned char*)full;
 
 	ciphertext += TAG_LENGTH;
+	base64_convert(ciphertext, e_b64_mime, 28, realcipher, e_b64_raw, DIGEST_SIZE, flg_Base64_MIME_TRAIL_EQ);
 
-	for(i=0;i<DIGEST_SIZE;i++)
-	{
-		realcipher[i] = atoi16[ARCH_INDEX(ciphertext[i*2])]*16 +
-			atoi16[ARCH_INDEX(ciphertext[i*2+1])];
-	}
-	return (void *) realcipher;
+	return (void*)realcipher;
 }
 
 static int get_hash_0(int index) { return hash_table_192[hash_ids[3 + 3 * index]] & PH_MASK_0; }
@@ -401,7 +333,7 @@ static void set_key(char *_key, int index)
 	const ARCH_WORD_32 *key = (ARCH_WORD_32*)_key;
 	int len = strlen(_key);
 
-	if (mask_int_cand.num_int_cand > 1 && !is_static_gpu_mask) {
+	if (mask_int_cand.num_int_cand > 1 && !mask_gpu_is_static) {
 		int i;
 		saved_int_key_loc[index] = 0;
 		for (i = 0; i < MASK_FMT_INT_PLHDR; i++) {
@@ -457,7 +389,7 @@ static char *get_key(int index)
 
 	if (mask_skip_ranges && mask_int_cand.num_int_cand > 1) {
 		for (i = 0; i < MASK_FMT_INT_PLHDR && mask_skip_ranges[i] != -1; i++)
-			if (is_static_gpu_mask)
+			if (mask_gpu_is_static)
 				out[static_gpu_locations[i]] =
 				mask_int_cand.int_cand[int_index].x[i];
 			else
@@ -742,7 +674,7 @@ static int crypt_all(int *pcount, struct db_salt *salt)
 
 	BENCH_CLERROR(clEnqueueWriteBuffer(queue[gpu_id], buffer_idx, CL_TRUE, 0, 4 * global_work_size, saved_idx, 0, NULL, NULL), "failed in clEnqueueWriteBuffer buffer_idx.");
 
-	if (!is_static_gpu_mask)
+	if (!mask_gpu_is_static)
 		BENCH_CLERROR(clEnqueueWriteBuffer(queue[gpu_id], buffer_int_key_loc, CL_TRUE, 0, 4 * global_work_size, saved_int_key_loc, 0, NULL, NULL), "failed in clEnqueueWriteBuffer buffer_int_key_loc.");
 
 	if (salt != NULL && salt->count > 4500 &&
@@ -1023,17 +955,18 @@ static void reset(struct db_main *db)
 	else {
 		unsigned int *binary, i = 0;
 		char *ciphertext;
+		int tune_time = (options.flags & FLG_MASK_CHK) ? 300 : 50;
 
-		while (tests[num_loaded_hashes].ciphertext != NULL)
+		while (rawsha1_common_tests[num_loaded_hashes].ciphertext != NULL)
 			num_loaded_hashes++;
 
 		loaded_hashes = (cl_uint*)mem_alloc(6 * sizeof(cl_uint) * num_loaded_hashes);
 
-		while (tests[i].ciphertext != NULL) {
-			char **fields = tests[i].fields;
+		while (rawsha1_common_tests[i].ciphertext != NULL) {
+			char **fields = rawsha1_common_tests[i].fields;
 			if (!fields[1])
-				fields[1] = tests[i].ciphertext;
-			ciphertext = split(prepare(fields, &FMT_STRUCT), 0, &FMT_STRUCT);
+				fields[1] = rawsha1_common_tests[i].ciphertext;
+			ciphertext = rawsha1_common_split(rawsha1_common_prepare(fields, &FMT_STRUCT), 0, &FMT_STRUCT);
 			binary = (unsigned int*)get_binary(ciphertext);
 			loaded_hashes[6 * i] = binary[0];
 			loaded_hashes[6 * i + 1] = binary[1];
@@ -1068,7 +1001,7 @@ static void reset(struct db_main *db)
 		HANDLE_CLERROR(clEnqueueWriteBuffer(queue[gpu_id], buffer_offset_table, CL_TRUE, 0, sizeof(OFFSET_TABLE_WORD) * offset_table_size, offset_table, 0, NULL, NULL), "failed in clEnqueueWriteBuffer buffer_offset_table.");
 		HANDLE_CLERROR(clEnqueueWriteBuffer(queue[gpu_id], buffer_hash_table, CL_TRUE, 0, sizeof(cl_uint) * hash_table_size * 2, hash_table_192, 0, NULL, NULL), "failed in clEnqueueWriteBuffer buffer_hash_table.");
 
-		auto_tune(NULL, 50);
+		auto_tune(NULL, tune_time);
 		hash_ids[0] = 0;
 
 		initialized++;
@@ -1092,14 +1025,14 @@ struct fmt_main FMT_STRUCT = {
 		MAX_KEYS_PER_CRYPT,
 		FMT_CASE | FMT_8_BIT | FMT_SPLIT_UNIFIES_CASE | FMT_REMOVE,
 		{ NULL },
-		tests
+		rawsha1_common_tests
 	}, {
 		init,
 		done,
 		reset,
-		prepare,
-		valid,
-		split,
+		rawsha1_common_prepare,
+		rawsha1_common_valid,
+		rawsha1_common_split,
 		get_binary,
 		fmt_default_salt,
 		{ NULL },
